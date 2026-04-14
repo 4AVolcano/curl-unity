@@ -189,13 +189,9 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
 
-      - name: Install NASM and jom
-        run: choco install nasm jom -y --no-progress
+      - name: Install jom
+        run: choco install jom -y --no-progress
         shell: cmd
-
-      - name: Add NASM to PATH
-        shell: cmd
-        run: echo C:\Program Files\NASM>> %GITHUB_PATH%
 
       - name: Get deps hash
         id: deps
