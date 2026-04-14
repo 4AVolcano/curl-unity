@@ -363,9 +363,8 @@ cl /O2 /LD /MD ^
     ws2_32.lib crypt32.lib advapi32.lib bcrypt.lib
 if errorlevel 1 goto :error
 
-REM Clean intermediate files
+REM Clean intermediate files (keep .lib for linking)
 del /q "%DLL_OUT%\curl_unity_bridge.obj" 2>nul
-del /q "%DLL_OUT%\libcurl_unity.lib" 2>nul
 del /q "%DLL_OUT%\libcurl_unity.exp" 2>nul
 
 echo   -^> %DLL_OUT%\libcurl_unity.dll

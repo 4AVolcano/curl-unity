@@ -47,6 +47,13 @@ jobs:
           name: log-macos-arm64
           path: build.log
 
+      - name: Verify build
+        run: |
+          cc -o build/verify tests/verify_build.c \
+            -Ibuild/macos-arm64/install/include \
+            -Loutput/macOS -lcurl_unity
+          DYLD_LIBRARY_PATH=output/macOS ./build/verify
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -86,6 +93,14 @@ jobs:
         with:
           name: log-ios-arm64
           path: build.log
+
+      - name: Verify build (symbol check)
+        run: |
+          echo "Bridge symbols:"
+          nm -gU output/iOS/libcurl_unity.a | grep curl_unity_ | sort -u
+          count=$(nm -gU output/iOS/libcurl_unity.a | grep -c curl_unity_)
+          echo "Found $count bridge symbols"
+          [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -135,6 +150,14 @@ jobs:
         with:
           name: log-${{ matrix.platform }}
           path: build.log
+
+      - name: Verify build (symbol check)
+        run: |
+          echo "Bridge symbols:"
+          readelf -Ws output/Android/${{ matrix.output }}/libcurl_unity.so | grep curl_unity_ | grep -v UND
+          count=$(readelf -Ws output/Android/${{ matrix.output }}/libcurl_unity.so | grep curl_unity_ | grep -cv UND)
+          echo "Found $count bridge symbols"
+          [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -202,6 +225,13 @@ jobs:
         with:
           name: log-${{ matrix.platform }}
           path: build.log
+
+      - name: Verify build
+        shell: cmd
+        run: |
+          cl /I"build\${{ matrix.platform }}\install\include" tests\verify_build.c /Fe:verify.exe /link "output\Windows\${{ matrix.output_arch }}\libcurl_unity.lib"
+          copy "output\Windows\${{ matrix.output_arch }}\libcurl_unity.dll" .
+          verify.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
