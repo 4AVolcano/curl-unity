@@ -97,8 +97,8 @@ jobs:
       - name: Verify build (symbol check)
         run: |
           echo "Bridge symbols:"
-          nm -gU output/iOS/libcurl_unity.a | grep curl_unity_ | sort -u
-          count=$(nm -gU output/iOS/libcurl_unity.a | grep -c curl_unity_)
+          nm -gU output/iOS/libcurl_unity.a | grep ' T .*curl_unity_' | sort -u
+          count=$(nm -gU output/iOS/libcurl_unity.a | grep -c ' T .*curl_unity_')
           echo "Found $count bridge symbols"
           [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
 
@@ -154,8 +154,8 @@ jobs:
       - name: Verify build (symbol check)
         run: |
           echo "Bridge symbols:"
-          readelf -Ws output/Android/${{ matrix.output }}/libcurl_unity.so | grep curl_unity_ | grep -v UND
-          count=$(readelf -Ws output/Android/${{ matrix.output }}/libcurl_unity.so | grep curl_unity_ | grep -cv UND)
+          nm -gD output/Android/${{ matrix.output }}/libcurl_unity.so | grep ' T .*curl_unity_'
+          count=$(nm -gD output/Android/${{ matrix.output }}/libcurl_unity.so | grep -c ' T .*curl_unity_')
           echo "Found $count bridge symbols"
           [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
 
