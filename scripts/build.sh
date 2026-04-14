@@ -21,7 +21,7 @@
 #   --ios-min <ver>      iOS 最低部署版本 (默认 13.0)
 #   --jobs <N>           并行编译线程数 (默认自动检测)
 #
-set -euo pipefail
+set -eo pipefail
 
 # ============================================================
 # 项目路径
@@ -212,15 +212,28 @@ elapsed() {
 # ============================================================
 
 # 确保 git 子模块已初始化
+# 用法: ensure_submodules <repo_dir> [submodule_path ...]
+#   不指定路径时初始化所有子模块，指定路径时只初始化指定的
 ensure_submodules() {
   local repo_dir="$1"
-  if [[ -f "$repo_dir/.gitmodules" ]]; then
-    cd "$repo_dir"
+  shift
+  if [[ ! -f "$repo_dir/.gitmodules" ]]; then return; fi
+
+  pushd "$repo_dir" > /dev/null
+  if [[ $# -gt 0 ]]; then
+    for path in "$@"; do
+      if [[ ! -e "$path/.git" ]]; then
+        echo "  初始化子模块: $(basename "$repo_dir")/$path"
+        git submodule update --init --depth 1 -- "$path"
+      fi
+    done
+  else
     if git submodule status | grep -q '^-'; then
       echo "  初始化子模块: $(basename "$repo_dir")"
       git submodule update --init --depth 1
     fi
   fi
+  popd > /dev/null
 }
 
 build_openssl() {
@@ -263,7 +276,7 @@ build_nghttp2() {
   local start
   start=$(step_time)
 
-  ensure_submodules "$DEPS_SRC/nghttp2"
+  # nghttp2: ENABLE_LIB_ONLY 模式不需要嵌套子模块
 
   # 清理 install 目录中可能残留的旧动态库
   rm -f "$PREFIX"/lib/libnghttp2*
@@ -296,7 +309,7 @@ build_nghttp3() {
   local start
   start=$(step_time)
 
-  ensure_submodules "$DEPS_SRC/nghttp3"
+  ensure_submodules "$DEPS_SRC/nghttp3" "lib/sfparse"
 
   rm -f "$PREFIX"/lib/libnghttp3*
 
@@ -328,7 +341,7 @@ build_ngtcp2() {
   local start
   start=$(step_time)
 
-  ensure_submodules "$DEPS_SRC/ngtcp2"
+  # ngtcp2: ENABLE_LIB_ONLY 模式不需要嵌套子模块
 
   rm -f "$PREFIX"/lib/libngtcp2*
 
@@ -390,6 +403,9 @@ build_libcurl() {
   log "[$PLATFORM] 编译 libcurl"
   local start
   start=$(step_time)
+
+  # 清除依赖库安装的 cmake package config，避免与 curl 的 FindXXX 模块冲突
+  rm -rf "$PREFIX/lib/cmake/nghttp2" "$PREFIX/lib/cmake/nghttp3" "$PREFIX/lib/cmake/ngtcp2"
 
   local build_dir="$PROJECT_ROOT/build/$PLATFORM/curl"
   rm -rf "$build_dir"

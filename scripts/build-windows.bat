@@ -167,7 +167,7 @@ echo   [%PLATFORM%] Building nghttp2
 echo ========================================
 echo.
 
-call :ensure_submodules "%DEPS_SRC%\nghttp2"
+REM nghttp2: ENABLE_LIB_ONLY mode does not need nested submodules
 
 set "NGHTTP2_BUILD=%PROJECT_ROOT%\build\%PLATFORM%\nghttp2"
 if exist "%NGHTTP2_BUILD%" rd /s /q "%NGHTTP2_BUILD%"
@@ -204,7 +204,7 @@ echo   [%PLATFORM%] Building nghttp3
 echo ========================================
 echo.
 
-call :ensure_submodules "%DEPS_SRC%\nghttp3"
+call :ensure_submodules "%DEPS_SRC%\nghttp3" "lib\sfparse"
 
 set "NGHTTP3_BUILD=%PROJECT_ROOT%\build\%PLATFORM%\nghttp3"
 if exist "%NGHTTP3_BUILD%" rd /s /q "%NGHTTP3_BUILD%"
@@ -241,7 +241,7 @@ echo   [%PLATFORM%] Building ngtcp2
 echo ========================================
 echo.
 
-call :ensure_submodules "%DEPS_SRC%\ngtcp2"
+REM ngtcp2: ENABLE_LIB_ONLY mode does not need nested submodules
 
 set "NGTCP2_BUILD=%PROJECT_ROOT%\build\%PLATFORM%\ngtcp2"
 if exist "%NGTCP2_BUILD%" rd /s /q "%NGTCP2_BUILD%"
@@ -275,6 +275,11 @@ echo ========================================
 echo   [%PLATFORM%] Building libcurl
 echo ========================================
 echo.
+
+REM Clean cmake package configs that conflict with curl's FindXXX modules
+if exist "%PREFIX%\lib\cmake\nghttp2" rd /s /q "%PREFIX%\lib\cmake\nghttp2"
+if exist "%PREFIX%\lib\cmake\nghttp3" rd /s /q "%PREFIX%\lib\cmake\nghttp3"
+if exist "%PREFIX%\lib\cmake\ngtcp2" rd /s /q "%PREFIX%\lib\cmake\ngtcp2"
 
 set "CURL_BUILD=%PROJECT_ROOT%\build\%PLATFORM%\curl"
 if exist "%CURL_BUILD%" rd /s /q "%CURL_BUILD%"
@@ -366,11 +371,19 @@ REM ============================================================
 
 :ensure_submodules
 set "_repo=%~1"
+set "_subpath=%~2"
 if not exist "%_repo%\.gitmodules" goto :eof
 pushd "%_repo%"
-git submodule status | findstr /B /C:"-" >nul 2>&1 && (
-    echo   Initializing submodules: %~nx1
-    git submodule update --init --depth 1
+if defined _subpath (
+    if not exist "%_subpath%\.git" (
+        echo   Initializing submodule: %~nx1\%_subpath%
+        git submodule update --init --depth 1 -- "%_subpath%"
+    )
+) else (
+    git submodule status | findstr /B /C:"-" >nul 2>&1 && (
+        echo   Initializing submodules: %~nx1
+        git submodule update --init --depth 1
+    )
 )
 popd
 goto :eof
