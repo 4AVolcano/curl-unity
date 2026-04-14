@@ -350,6 +350,7 @@ cl /O2 /LD /MD ^
     /Fo:"%DLL_OUT%\curl_unity_bridge.obj" ^
     /Fe:"%DLL_OUT%\libcurl_unity.dll" ^
     /link ^
+    /DEF:"%PROJECT_ROOT%\bridge\exports.def" ^
     /IMPLIB:"%DLL_OUT%\libcurl_unity.lib" ^
     /WHOLEARCHIVE:"%PREFIX%\lib\libcurl.lib" ^
     "%PREFIX%\lib\libssl.lib" ^

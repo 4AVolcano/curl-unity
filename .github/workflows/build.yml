@@ -229,9 +229,9 @@ jobs:
       - name: Verify build
         shell: cmd
         run: |
-          cl /DCURL_STATICLIB /I"build\${{ matrix.platform }}\install\include" tests\verify_build.c /Fe:verify.exe /link "output\Windows\${{ matrix.output_arch }}\libcurl_unity.lib"
-          copy "output\Windows\${{ matrix.output_arch }}\libcurl_unity.dll" .
-          verify.exe
+          cl /DCURL_STATICLIB /I"build\${{ matrix.platform }}\install\include" tests\verify_build.c /Fe:verify.exe /link "output\Windows\${{ matrix.output_arch }}\libcurl_unity.lib" || exit /b 1
+          copy "output\Windows\${{ matrix.output_arch }}\libcurl_unity.dll" . || exit /b 1
+          verify.exe || exit /b 1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

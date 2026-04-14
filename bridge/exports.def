@@ -1,0 +1,46 @@
+; libcurl_unity.dll export definitions (Windows only)
+;
+; Windows DLLs only export __declspec(dllexport) symbols.
+; Bridge functions have this via BRIDGE_API, but curl core functions
+; (linked from static lib) do not. This file explicitly exports
+; all symbols needed by P/Invoke (CurlNative.cs).
+;
+; When adding new P/Invoke declarations to CurlNative.cs, add the
+; corresponding function here.
+
+EXPORTS
+    ; curl core — non-variadic, called directly via P/Invoke
+    curl_global_init
+    curl_global_cleanup
+    curl_easy_init
+    curl_easy_cleanup
+    curl_easy_perform
+    curl_easy_strerror
+    curl_easy_reset
+    curl_version
+    curl_slist_append
+    curl_slist_free_all
+    curl_free
+    curl_multi_init
+    curl_multi_cleanup
+    curl_multi_add_handle
+    curl_multi_remove_handle
+    curl_multi_perform
+    curl_multi_poll
+    curl_multi_wakeup
+
+    ; bridge — variadic wrappers
+    curl_unity_setopt_string
+    curl_unity_setopt_long
+    curl_unity_setopt_ptr
+    curl_unity_setopt_off_t
+    curl_unity_setopt_write_function
+    curl_unity_setopt_write_data
+    curl_unity_setopt_header_function
+    curl_unity_setopt_header_data
+    curl_unity_getinfo_long
+    curl_unity_getinfo_string
+    curl_unity_getinfo_double
+    curl_unity_getinfo_off_t
+    curl_unity_multi_setopt_long
+    curl_unity_multi_info_read
