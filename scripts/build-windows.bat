@@ -331,8 +331,10 @@ if not exist "%DLL_OUT%" mkdir "%DLL_OUT%"
 cl /O2 /LD /MD ^
     /I"%PREFIX%\include" ^
     "%BRIDGE_SRC%" ^
+    /Fo:"%DLL_OUT%\" ^
     /Fe:"%DLL_OUT%\libcurl_unity.dll" ^
     /link ^
+    /IMPLIB:"%DLL_OUT%\libcurl_unity.lib" ^
     /WHOLEARCHIVE:"%PREFIX%\lib\libcurl.lib" ^
     "%PREFIX%\lib\libssl.lib" ^
     "%PREFIX%\lib\libcrypto.lib" ^
@@ -346,6 +348,7 @@ if errorlevel 1 goto :error
 
 REM Clean intermediate files
 del /q "%DLL_OUT%\curl_unity_bridge.obj" 2>nul
+del /q "%DLL_OUT%\libcurl_unity.lib" 2>nul
 del /q "%DLL_OUT%\libcurl_unity.exp" 2>nul
 
 echo   -^> %DLL_OUT%\libcurl_unity.dll

@@ -155,12 +155,22 @@ configure_platform() {
 # ============================================================
 # 工具函数
 # ============================================================
+_ndk_host_tag() {
+  # NDK prebuilt 目录名: darwin-x86_64 (macOS) 或 linux-x86_64 (Linux)
+  echo "$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64"
+}
+
 _require_ndk() {
   # 自动探测 NDK 路径
   if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
+    # macOS 默认路径
     local sdk_ndk_dir="$HOME/Library/Android/sdk/ndk"
+    # Linux 默认路径
+    [[ ! -d "$sdk_ndk_dir" ]] && sdk_ndk_dir="$HOME/Android/Sdk/ndk"
+    # ANDROID_HOME 环境变量
+    [[ ! -d "$sdk_ndk_dir" ]] && [[ -n "${ANDROID_HOME:-}" ]] && sdk_ndk_dir="$ANDROID_HOME/ndk"
+
     if [[ -d "$sdk_ndk_dir" ]]; then
-      # 取最新版本
       ANDROID_NDK_HOME="$(ls -d "$sdk_ndk_dir"/*/ 2>/dev/null | sort -V | tail -1)"
       ANDROID_NDK_HOME="${ANDROID_NDK_HOME%/}"
     fi
@@ -171,7 +181,7 @@ _require_ndk() {
   fi
   export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
   # 将 NDK 工具链加入 PATH (OpenSSL 需要)
-  local toolchain_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+  local toolchain_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$(_ndk_host_tag)/bin"
   if [[ -d "$toolchain_bin" ]]; then
     export PATH="$toolchain_bin:$PATH"
   fi
@@ -536,7 +546,7 @@ _collect_android() {
   local target="$2"
   mkdir -p "$out"
 
-  local toolchain_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+  local toolchain_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$(_ndk_host_tag)/bin"
   local clang="$toolchain_bin/${target}${ANDROID_MIN_API}-clang"
 
   # bridge.c + 所有静态库 → 单个 .so
