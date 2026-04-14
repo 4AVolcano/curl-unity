@@ -144,15 +144,16 @@ perl "%DEPS_SRC%\openssl\Configure" %OPENSSL_TARGET% ^
     /FS
 if errorlevel 1 ( popd & goto :error )
 
-REM Use jom for parallel build if available, fall back to nmake
+REM Use jom for parallel compilation, nmake for install (jom has
+REM file-rename conflicts with OpenSSL's depend/install targets)
 set "MAKE_CMD=nmake"
 where jom >nul 2>&1 && set "MAKE_CMD=jom -j%NUMBER_OF_PROCESSORS%"
 echo   Build tool: %MAKE_CMD%
 
-%MAKE_CMD%
+%MAKE_CMD% build_sw
 if errorlevel 1 ( popd & goto :error )
 
-%MAKE_CMD% install_sw
+nmake install_sw
 if errorlevel 1 ( popd & goto :error )
 
 popd
