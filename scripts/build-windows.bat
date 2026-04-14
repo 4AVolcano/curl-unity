@@ -141,7 +141,7 @@ perl "%DEPS_SRC%\openssl\Configure" %OPENSSL_TARGET% ^
     no-shared ^
     no-tests ^
     no-apps ^
-    no-asm
+    /FS
 if errorlevel 1 ( popd & goto :error )
 
 REM Use jom for parallel build if available, fall back to nmake
