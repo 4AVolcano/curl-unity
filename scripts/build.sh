@@ -19,6 +19,7 @@
 #   --curl-cli           额外编译 curl 命令行工具（仅 macOS 本机架构有效）
 #   --android-api <N>    Android 最低 API 等级 (默认 24)
 #   --ios-min <ver>      iOS 最低部署版本 (默认 13.0)
+#   --macos-min <ver>    macOS 最低部署版本 (默认 10.14)
 #   --jobs <N>           并行编译线程数 (默认自动检测)
 #
 set -eo pipefail
@@ -40,6 +41,7 @@ CLEAN=0
 BUILD_CURL_CLI=0
 ANDROID_MIN_API=24
 IOS_MIN_VERSION="13.0"
+MACOS_MIN_VERSION="10.14"
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 
 # ============================================================
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --curl-cli)     BUILD_CURL_CLI=1; shift ;;
     --android-api)  ANDROID_MIN_API="$2"; shift 2 ;;
     --ios-min)      IOS_MIN_VERSION="$2"; shift 2 ;;
+    --macos-min)    MACOS_MIN_VERSION="$2"; shift 2 ;;
     --jobs)         JOBS="$2"; shift 2 ;;
     -h|--help)
       sed -n '3,/^$/p' "$0" | sed 's/^#//; s/^ //'
@@ -89,11 +92,19 @@ configure_platform() {
   case "$PLATFORM" in
     macos-arm64)
       OPENSSL_TARGET="darwin64-arm64-cc"
-      CMAKE_EXTRA_ARGS=(-DCMAKE_OSX_ARCHITECTURES=arm64)
+      OPENSSL_EXTRA_ARGS=("-mmacosx-version-min=$MACOS_MIN_VERSION")
+      CMAKE_EXTRA_ARGS=(
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION"
+      )
       ;;
     macos-x86_64)
       OPENSSL_TARGET="darwin64-x86_64-cc"
-      CMAKE_EXTRA_ARGS=(-DCMAKE_OSX_ARCHITECTURES=x86_64)
+      OPENSSL_EXTRA_ARGS=("-mmacosx-version-min=$MACOS_MIN_VERSION")
+      CMAKE_EXTRA_ARGS=(
+        -DCMAKE_OSX_ARCHITECTURES=x86_64
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION"
+      )
       ;;
     ios-arm64)
       OPENSSL_TARGET="ios64-xcrun"
@@ -515,7 +526,8 @@ _collect_macos() {
   mkdir -p "$out"
 
   # bridge.c + 所有静态库 → 单个 dylib
-  cc -arch "$arch" -shared -o "$out/libcurl_unity.dylib" \
+  cc -arch "$arch" -mmacosx-version-min="$MACOS_MIN_VERSION" \
+    -shared -o "$out/libcurl_unity.dylib" \
     -I"$PREFIX/include" \
     "$BRIDGE_SRC" \
     -Wl,-force_load,$PREFIX/lib/libcurl.a \

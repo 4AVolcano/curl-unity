@@ -7,7 +7,8 @@ REM   Run from "x64 Native Tools Command Prompt" for 64-bit
 REM   Run from "x86 Native Tools Command Prompt" for 32-bit
 REM
 REM Options:
-REM   --clean    Clean build directory before building
+REM   --clean              Clean build directory before building
+REM   --win-min <hex>      Minimum Windows version (default: 0x0601 = Win7 SP1)
 REM
 REM Prerequisites:
 REM   Visual Studio 2017+ (C++ desktop workload)
@@ -24,6 +25,11 @@ set "DEPS_SRC=%PROJECT_ROOT%\deps"
 set "CURL_SRC=%DEPS_SRC%\curl"
 set "BRIDGE_SRC=%PROJECT_ROOT%\bridge\curl_unity_bridge.c"
 set "OUTPUT_DIR=%PROJECT_ROOT%\output"
+
+REM ============================================================
+REM Minimum Windows version (default: Windows 7 SP1)
+REM ============================================================
+set "WIN_MIN_VER=0x0601"
 
 REM ============================================================
 REM Detect MSVC target architecture
@@ -66,6 +72,7 @@ set "PREFIX=%PROJECT_ROOT%\build\%PLATFORM%\install"
 echo ========================================
 echo   libcurl Windows build
 echo   Arch: %ARCH% (%PLATFORM%)
+echo   Min:  %WIN_MIN_VER%
 echo   Root: %PROJECT_ROOT%
 echo ========================================
 
@@ -73,8 +80,16 @@ REM ============================================================
 REM Parse options
 REM ============================================================
 set "CLEAN=0"
+set "_NEXT_IS_WINMIN=0"
 for %%a in (%*) do (
-    if "%%a"=="--clean" set "CLEAN=1"
+    if "!_NEXT_IS_WINMIN!"=="1" (
+        set "WIN_MIN_VER=%%a"
+        set "_NEXT_IS_WINMIN=0"
+    ) else if "%%a"=="--clean" (
+        set "CLEAN=1"
+    ) else if "%%a"=="--win-min" (
+        set "_NEXT_IS_WINMIN=1"
+    )
 )
 if "%CLEAN%"=="1" (
     echo Cleaning build\%PLATFORM% ...
@@ -104,6 +119,7 @@ if exist "%ZLIB_BUILD%" rd /s /q "%ZLIB_BUILD%"
 cmake -B "%ZLIB_BUILD%" -S "%DEPS_SRC%\zlib" -G Ninja ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DCMAKE_INSTALL_PREFIX="%PREFIX%" ^
+    -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
     -DBUILD_SHARED_LIBS=OFF
 if errorlevel 1 goto :error
 
@@ -141,7 +157,8 @@ perl "%DEPS_SRC%\openssl\Configure" %OPENSSL_TARGET% ^
     no-shared ^
     no-tests ^
     no-apps ^
-    /FS
+    /FS ^
+    -D_WIN32_WINNT=%WIN_MIN_VER%
 if errorlevel 1 ( popd & goto :error )
 
 REM Use jom for parallel compilation, nmake for install (jom has
@@ -183,6 +200,7 @@ cmake -B "%NGHTTP2_BUILD%" -S "%DEPS_SRC%\nghttp2" -G Ninja ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DCMAKE_INSTALL_PREFIX="%PREFIX%" ^
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON ^
+    -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
     -DENABLE_LIB_ONLY=ON ^
     -DBUILD_TESTING=OFF ^
     -DBUILD_SHARED_LIBS=OFF ^
@@ -221,6 +239,7 @@ cmake -B "%NGHTTP3_BUILD%" -S "%DEPS_SRC%\nghttp3" -G Ninja ^
     -DCMAKE_BUILD_TYPE=Release ^
     -DCMAKE_INSTALL_PREFIX="%PREFIX%" ^
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON ^
+    -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
     -DENABLE_LIB_ONLY=ON ^
     -DBUILD_TESTING=OFF ^
     -DENABLE_SHARED_LIB=OFF ^
@@ -261,6 +280,7 @@ cmake -B "%NGTCP2_BUILD%" -S "%DEPS_SRC%\ngtcp2" -G Ninja ^
     -DCMAKE_PREFIX_PATH="%PREFIX%" ^
     -DOPENSSL_ROOT_DIR="%PREFIX%" ^
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON ^
+    -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
     -DENABLE_OPENSSL=ON ^
     -DENABLE_LIB_ONLY=ON ^
     -DBUILD_TESTING=OFF ^
@@ -303,7 +323,8 @@ cmake -B "%CURL_BUILD%" -S "%CURL_SRC%" -G Ninja ^
     -DBUILD_SHARED_LIBS=OFF ^
     -DBUILD_STATIC_LIBS=ON ^
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON ^
-    -DCMAKE_C_FLAGS="/DNGHTTP2_STATICLIB /DNGTCP2_STATICLIB /DNGHTTP3_STATICLIB" ^
+    -DCMAKE_C_FLAGS="/DNGHTTP2_STATICLIB /DNGTCP2_STATICLIB /DNGHTTP3_STATICLIB /D_WIN32_WINNT=%WIN_MIN_VER%" ^
+    -DCURL_TARGET_WINDOWS_VERSION=%WIN_MIN_VER% ^
     -DCURL_ENABLE_SSL=ON ^
     -DCURL_USE_OPENSSL=ON ^
     -DUSE_NGHTTP2=ON ^
@@ -345,6 +366,7 @@ set "DLL_OUT=%OUTPUT_DIR%\Windows\%OUTPUT_ARCH%"
 if not exist "%DLL_OUT%" mkdir "%DLL_OUT%"
 
 cl /O2 /LD /MD ^
+    /D_WIN32_WINNT=%WIN_MIN_VER% ^
     /I"%PREFIX%\include" ^
     "%BRIDGE_SRC%" ^
     /Fo:"%DLL_OUT%\curl_unity_bridge.obj" ^

@@ -320,19 +320,23 @@ PREFIX=$PROJECT_ROOT/build/$PLATFORM/install
 mkdir -p $PROJECT_ROOT/build/$PLATFORM/openssl
 cd $PROJECT_ROOT/build/$PLATFORM/openssl
 
+MACOS_MIN_VERSION=10.14
+
 $DEPS_SRC/openssl/Configure darwin64-arm64-cc \
   --prefix=$PREFIX \
   --libdir=lib \
   no-shared \
   no-tests \
   no-apps \
-  -fPIC
+  -fPIC \
+  -mmacosx-version-min=$MACOS_MIN_VERSION
 
 make -j$(sysctl -n hw.ncpu)
 make install_sw   # install_sw 跳过文档安装
 ```
 
 > 对于 x86_64，将 `darwin64-arm64-cc` 改为 `darwin64-x86_64-cc`。
+> `-mmacosx-version-min` 确保 OpenSSL 生成兼容 macOS 10.14+ 的代码。
 
 #### 5.1.2 编译 nghttp2
 
@@ -341,6 +345,7 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/nghttp2 -S $DEPS_SRC/nghttp2 -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PREFIX \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MIN_VERSION \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DENABLE_LIB_ONLY=ON \
   -DBUILD_SHARED_LIBS=OFF \
@@ -357,6 +362,7 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/nghttp3 -S $DEPS_SRC/nghttp3 -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PREFIX \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MIN_VERSION \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DENABLE_LIB_ONLY=ON \
   -DENABLE_SHARED_LIB=OFF \
@@ -373,6 +379,7 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/ngtcp2 -S $DEPS_SRC/ngtcp2 -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PREFIX \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MIN_VERSION \
   -DCMAKE_PREFIX_PATH=$PREFIX \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DENABLE_OPENSSL=ON \
@@ -391,6 +398,7 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/curl -S $PROJECT_ROOT/curl -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=$PREFIX \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MIN_VERSION \
   -DCMAKE_PREFIX_PATH=$PREFIX \
   -DOPENSSL_ROOT_DIR=$PREFIX \
   -DBUILD_CURL_EXE=OFF \
@@ -435,6 +443,7 @@ install_name_tool -id @rpath/libcurl.dylib $OUTPUT_DIR/macOS/libcurl.dylib
 
 #### 5.1.7 macOS 特殊注意事项
 
+- **最低部署版本**：默认 macOS 10.14 (Mojave)，与 Unity 2022 支持的最低 macOS 版本对齐。可通过 `--macos-min` 参数调整。所有依赖（OpenSSL、nghttp2 等）和最终 dylib 链接均使用统一的 deployment target。
 - **install_name**：使用 `install_name_tool -id @rpath/libcurl.dylib` 确保 Unity 能正确加载。
 - **代码签名**：macOS 可能要求动态库签名，发布前需 `codesign --force --sign - libcurl.dylib`。
 
@@ -598,6 +607,7 @@ set PROJECT_ROOT=C:\curl-build
 set DEPS_SRC=%PROJECT_ROOT%\deps
 set PLATFORM=windows-x64
 set PREFIX=%PROJECT_ROOT%\build\%PLATFORM%\install
+set WIN_MIN_VER=0x0601
 ```
 
 **编译 OpenSSL：**
@@ -605,7 +615,7 @@ set PREFIX=%PROJECT_ROOT%\build\%PLATFORM%\install
 ```cmd
 mkdir %PROJECT_ROOT%\build\%PLATFORM%\openssl
 cd %PROJECT_ROOT%\build\%PLATFORM%\openssl
-perl %DEPS_SRC%\openssl\Configure VC-WIN64A --prefix=%PREFIX% --libdir=lib no-shared no-tests no-apps
+perl %DEPS_SRC%\openssl\Configure VC-WIN64A --prefix=%PREFIX% --libdir=lib no-shared no-tests no-apps -D_WIN32_WINNT=%WIN_MIN_VER%
 nmake
 nmake install_sw
 ```
@@ -617,14 +627,15 @@ cmake -B %PROJECT_ROOT%\build\%PLATFORM%\nghttp2 -S %DEPS_SRC%\nghttp2 -G Ninja 
   -DCMAKE_BUILD_TYPE=Release ^
   -DCMAKE_INSTALL_PREFIX=%PREFIX% ^
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON ^
+  -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
   -DENABLE_LIB_ONLY=ON ^
   -DBUILD_SHARED_LIBS=OFF ^
   -DBUILD_STATIC_LIBS=ON
 cmake --build %PROJECT_ROOT%\build\%PLATFORM%\nghttp2
 cmake --install %PROJECT_ROOT%\build\%PLATFORM%\nghttp2
 
-:: nghttp3 同理
-:: ngtcp2 额外需要 -DCMAKE_PREFIX_PATH=%PREFIX% -DENABLE_OPENSSL=ON
+:: nghttp3 同理，额外加 -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%"
+:: ngtcp2 额外需要 -DCMAKE_PREFIX_PATH=%PREFIX% -DENABLE_OPENSSL=ON -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%"
 ```
 
 **编译 libcurl：**
@@ -638,6 +649,8 @@ cmake -B %PROJECT_ROOT%\build\%PLATFORM%\curl -S %DEPS_SRC%\curl -G Ninja ^
   -DBUILD_CURL_EXE=OFF ^
   -DBUILD_SHARED_LIBS=ON ^
   -DBUILD_STATIC_LIBS=OFF ^
+  -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
+  -DCURL_TARGET_WINDOWS_VERSION=%WIN_MIN_VER% ^
   -DCURL_ENABLE_SSL=ON ^
   -DCURL_USE_OPENSSL=ON ^
   -DUSE_NGHTTP2=ON ^
@@ -674,7 +687,7 @@ set PREFIX=%PROJECT_ROOT%\build\%PLATFORM%\install
 ```cmd
 mkdir %PROJECT_ROOT%\build\%PLATFORM%\openssl
 cd %PROJECT_ROOT%\build\%PLATFORM%\openssl
-perl %DEPS_SRC%\openssl\Configure VC-WIN32 --prefix=%PREFIX% --libdir=lib no-shared no-tests no-apps
+perl %DEPS_SRC%\openssl\Configure VC-WIN32 --prefix=%PREFIX% --libdir=lib no-shared no-tests no-apps -D_WIN32_WINNT=%WIN_MIN_VER%
 nmake
 nmake install_sw
 ```
@@ -739,6 +752,7 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/nghttp2 -S $DEPS_SRC/nghttp2 -G Ninja \
 
 #### 5.3.3 Windows 特殊注意事项
 
+- **最低 Windows 版本**：默认 Windows 7 SP1 (`_WIN32_WINNT=0x0601`)，与 Unity 2022 支持的最低 Windows 版本对齐。可通过 `--win-min` 参数调整。libcurl 硬性要求最低 Windows Vista (0x0600)。
 - **CRT 链接**：libcurl 动态库应使用动态 CRT（`/MD`，CMake 默认），不要使用静态 CRT（`/MT`）。CMake 变量：`-DCURL_STATIC_CRT=OFF`（默认即 OFF）。
 - **Winsock**：libcurl 在 Windows 上依赖 `ws2_32.lib` 和 `crypt32.lib`，CMake 会自动处理。
 - **32 位必要性**：虽然现代 Windows 系统绝大多数是 64 位，但部分用户可能以 32 位模式运行 Unity 应用。建议同时提供 x86 和 x64 两个版本。Unity 会根据 Player Settings 中的 Architecture 设置自动选择。
