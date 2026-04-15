@@ -505,14 +505,14 @@ collect_output() {
 }
 
 _collect_macos() {
-  local out="$OUTPUT_DIR/macOS"
-  mkdir -p "$out"
-
   local arch
   case "$PLATFORM" in
     macos-arm64)  arch=arm64 ;;
     macos-x86_64) arch=x86_64 ;;
   esac
+
+  local out="$OUTPUT_DIR/macOS/$arch"
+  mkdir -p "$out"
 
   # bridge.c + 所有静态库 → 单个 dylib
   cc -arch "$arch" -shared -o "$out/libcurl_unity.dylib" \

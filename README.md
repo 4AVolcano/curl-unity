@@ -75,17 +75,19 @@ curl-unity/
 ### 快速开始
 
 ```bash
-# macOS
-./scripts/build.sh macos-arm64
+# 全平台聚合构建
+./scripts/build-macos.sh            # macOS ARM64 + x86_64 → universal binary
+./scripts/build-ios.sh              # iOS ARM64
+./scripts/build-android.sh          # Android armv7 + arm64 + x86_64
+scripts\build-windows-x64.bat       # Windows x64
+scripts\build-windows-x86.bat       # Windows x86
 
-# iOS
-./scripts/build.sh ios-arm64
-
-# Android (armv7 + arm64, API 22)
-./scripts/build-android.sh
-
-# Windows (从 VS Native Tools Command Prompt 运行)
-scripts\build-windows.bat
+# 单架构构建
+./scripts/build-macos-arm64.sh      # macOS ARM64 only
+./scripts/build-macos-x86_64.sh     # macOS x86_64 only
+./scripts/build-android-arm64.sh    # Android arm64 only
+./scripts/build-android-x86_64.sh   # Android x86_64 only (模拟器)
+./scripts/build.sh <platform>       # 任意平台 (底层入口)
 ```
 
 产物输出到 `output/` 目录。详细构建指南见 [docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md)。
