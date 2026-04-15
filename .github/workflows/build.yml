@@ -23,9 +23,12 @@ jobs:
         with:
           submodules: true
 
-      - name: Get deps hash
+      - name: Get cache key
         id: deps
-        run: echo "hash=$(git submodule status | shasum -a 256 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+        run: |
+          deps_hash=$(git submodule status | shasum -a 256 | cut -d' ' -f1)
+          script_hash=$(shasum -a 256 scripts/build.sh | cut -d' ' -f1)
+          echo "hash=${deps_hash}-${script_hash}" >> $GITHUB_OUTPUT
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -70,9 +73,12 @@ jobs:
         with:
           submodules: true
 
-      - name: Get deps hash
+      - name: Get cache key
         id: deps
-        run: echo "hash=$(git submodule status | shasum -a 256 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+        run: |
+          deps_hash=$(git submodule status | shasum -a 256 | cut -d' ' -f1)
+          script_hash=$(shasum -a 256 scripts/build.sh | cut -d' ' -f1)
+          echo "hash=${deps_hash}-${script_hash}" >> $GITHUB_OUTPUT
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -130,9 +136,12 @@ jobs:
         with:
           submodules: true
 
-      - name: Get deps hash
+      - name: Get cache key
         id: deps
-        run: echo "hash=$(git submodule status | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+        run: |
+          deps_hash=$(git submodule status | sha256sum | cut -d' ' -f1)
+          script_hash=$(sha256sum scripts/build.sh | cut -d' ' -f1)
+          echo "hash=${deps_hash}-${script_hash}" >> $GITHUB_OUTPUT
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -200,10 +209,13 @@ jobs:
         shell: cmd
         run: echo C:\Program Files\NASM>> %GITHUB_PATH%
 
-      - name: Get deps hash
+      - name: Get cache key
         id: deps
         shell: bash
-        run: echo "hash=$(git submodule status | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+        run: |
+          deps_hash=$(git submodule status | sha256sum | cut -d' ' -f1)
+          script_hash=$(sha256sum scripts/build-windows.bat | cut -d' ' -f1)
+          echo "hash=${deps_hash}-${script_hash}" >> $GITHUB_OUTPUT
 
       - name: Cache dependencies
         uses: actions/cache@v4
