@@ -50,7 +50,7 @@ namespace CurlUnity.Core
                 CurlNative.curl_unity_setopt_string(handle, CurlNative.CURLOPT_CAINFO, _caCertPath);
             }
 
-#if (UNITY_STANDALONE_WIN || UNITY_WSA) && !UNITY_EDITOR
+#if UNITY_STANDALONE_WIN || UNITY_WSA
             // Windows: use native certificate store via CryptoAPI (curl 7.71.0+)
             CurlNative.curl_unity_setopt_long(handle, CurlNative.CURLOPT_SSL_OPTIONS,
                 CurlNative.CURLSSLOPT_NATIVE_CA);
