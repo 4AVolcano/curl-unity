@@ -4,12 +4,21 @@ output/
 tests/**/bin/
 tests/**/obj/
 
-demo
+# Unity demo 项目 (保留源码，忽略生成文件)
 demo/**/Library/
 demo/**/Temp/
 demo/**/Obj/
 demo/**/Build/
 demo/**/Logs/
+demo/**/UserSettings/
+demo/**/*.csproj
+demo/**/*.sln
+
+# 规划临时文件
+findings.md
+progress.md
+task_plan.md
+docs/archive/
 
 # IDE
 .vs/

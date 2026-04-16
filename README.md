@@ -127,14 +127,13 @@ libcurl + 全部依赖的跨平台编译管线。
 
 C# 封装层 + Unity 集成，开发中。
 
-- [ ] P/Invoke 绑定 (CurlNative)
-- [ ] Core 封装 (CurlMulti / BackgroundWorker / Request / Response)
-- [ ] Http 公开 API (IHttpClient / CurlHttpClient / HttpRequest / HttpResponse)
-- [ ] 扩展方法 (GetAsync / PostJsonAsync / ...)
-- [ ] 诊断模块 (HttpDiagnostics / HttpRequestTiming)
+- [x] P/Invoke 绑定 (CurlNative)
+- [x] Core 封装 (CurlMulti / BackgroundWorker / Request / Response)
+- [x] Http 公开 API (IHttpClient / CurlHttpClient / HttpRequest / HttpResponse)
+- [x] 扩展方法 (GetAsync / PostJsonAsync / ...)
+- [x] 诊断模块 (HttpDiagnostics / HttpRequestTiming)
 - [ ] CA 证书 (Apple SecTrust / Android JNI / Windows CryptoAPI)
-- [ ] iOS 构建后处理 (CurlPostProcessor)
-- [ ] 代码审查 + P0 修复
+- [x] iOS 构建后处理 (CurlPostProcessor)
 - [ ] Cookie 跨请求共享
 - [ ] Proxy 支持
 - [ ] Multipart / Form-Data 上传
