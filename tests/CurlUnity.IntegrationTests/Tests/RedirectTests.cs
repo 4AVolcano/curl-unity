@@ -68,10 +68,10 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         [Fact]
-        public async Task ManyRedirects_CurlDefaultLimitApplied()
+        public async Task ModerateRedirectChain_Succeeds()
         {
-            // curl default CURLOPT_MAXREDIRS is -1 (unlimited when FOLLOWLOCATION is on),
-            // but some builds default to 30 or 50. Test with a moderate chain.
+            // 验证中等长度的重定向链被正确跟随，且 RedirectCount 与跳数一致。
+            // 不涉及 CURLOPT_MAXREDIRS 上限行为（libcurl 默认 -1 = 不限）。
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/redirect/20");
 
             Assert.True(resp.HasResponse);

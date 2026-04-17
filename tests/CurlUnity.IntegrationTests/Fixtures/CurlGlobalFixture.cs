@@ -30,16 +30,26 @@ namespace CurlUnity.IntegrationTests.Fixtures
             if (libraryName != "curl_unity")
                 return IntPtr.Zero;
 
+            // 在 xUnit 测试里没有 Unity 宏，CurlNative.LIB 固定为 "curl_unity"。
+            // Plugins 下的二进制按平台有不同后缀/前缀，这里把请求名映射到实际文件。
+            string fileName;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                fileName = "libcurl_unity.dll";
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                fileName = "libcurl_unity.dylib";
+            else
+                fileName = "libcurl_unity.so";
+
             // Try loading from the assembly's directory first
             var assemblyDir = Path.GetDirectoryName(assembly.Location);
             if (assemblyDir != null)
             {
-                var libPath = Path.Combine(assemblyDir, "libcurl_unity.dylib");
+                var libPath = Path.Combine(assemblyDir, fileName);
                 if (File.Exists(libPath) && NativeLibrary.TryLoad(libPath, out var handle))
                     return handle;
             }
 
-            // Fallback: let the OS find it
+            // Fallback: let the OS search path find it
             if (NativeLibrary.TryLoad("libcurl_unity", out var fallback))
                 return fallback;
 

@@ -24,6 +24,8 @@ docs/archive/
 .vs/
 .vscode/
 .idea/
+*.DotSettings.user
+*.user
 *.swp
 *~
 

@@ -1,6 +1,7 @@
 using System;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using CurlUnity.Http;
 using CurlUnity.IntegrationTests.Fixtures;
@@ -86,21 +87,26 @@ namespace CurlUnity.IntegrationTests.Tests
 
         public void Dispose() => _client.Dispose();
 
-        private static bool IsNetworkAvailable()
+        /// <summary>
+        /// 有界检查网络是否可达 H3TestHost:443。避免 DNS/TCP 握手 stall 导致测试挂起。
+        /// 返回 true/false；报告为 Skipped 由调用方用 Skip.IfNot 处理。
+        /// </summary>
+        private static async Task<bool> IsNetworkAvailableAsync()
         {
             try
             {
                 using var tcp = new TcpClient();
-                tcp.Connect("h3-test.godrive.top", 443);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                await tcp.ConnectAsync("h3-test.godrive.top", 443, cts.Token);
                 return true;
             }
             catch { return false; }
         }
 
-        [Fact]
+        [SkippableFact]
         public async Task Http3Only_ConnectsViaQuic()
         {
-            if (!IsNetworkAvailable()) return; // skip when network unavailable
+            Skip.IfNot(await IsNetworkAvailableAsync(), "h3-test.godrive.top unreachable");
 
             _client.PreferredVersion = HttpVersion.Http3Only;
 
@@ -114,10 +120,10 @@ namespace CurlUnity.IntegrationTests.Tests
             Assert.StartsWith("proto=HTTP/3", body);
         }
 
-        [Fact]
+        [SkippableFact]
         public async Task PreferH3_NegotiatesToHttp3()
         {
-            if (!IsNetworkAvailable()) return; // skip when network unavailable
+            Skip.IfNot(await IsNetworkAvailableAsync(), "h3-test.godrive.top unreachable");
 
             _client.PreferredVersion = HttpVersion.PreferH3;
 
@@ -135,10 +141,10 @@ namespace CurlUnity.IntegrationTests.Tests
             Assert.StartsWith("proto=HTTP/", body);
         }
 
-        [Fact]
+        [SkippableFact]
         public async Task Http2_FallbackWorks()
         {
-            if (!IsNetworkAvailable()) return; // skip when network unavailable
+            Skip.IfNot(await IsNetworkAvailableAsync(), "h3-test.godrive.top unreachable");
 
             _client.PreferredVersion = HttpVersion.Http2;
 

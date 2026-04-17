@@ -12,12 +12,10 @@ namespace CurlUnity.IntegrationTests.Tests
     public class DiagnosticsTests : IDisposable
     {
         private readonly TestServerFixture _server;
-        private readonly CurlGlobalFixture _curl;
 
-        public DiagnosticsTests(TestServerFixture server, CurlGlobalFixture curl)
+        public DiagnosticsTests(TestServerFixture server, CurlGlobalFixture _)
         {
             _server = server;
-            _curl = curl;
         }
 
         public void Dispose() { }
