@@ -27,7 +27,9 @@ namespace CurlUnity.Http
         private readonly CurlBackgroundWorker _worker;
         private readonly ConcurrentDictionary<IntPtr, CancellationTokenRegistration> _cancellations = new();
         private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, byte> _pendingTasks = new();
-        private bool _disposed;
+        private int _disposedFlag;
+
+        private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
 
         /// <summary>全局 HTTP 版本偏好。对所有后续请求生效。默认 PreferH3。</summary>
         public HttpVersion PreferredVersion { get; set; } = HttpVersion.PreferH3;
@@ -56,7 +58,7 @@ namespace CurlUnity.Http
 
         public Task<IHttpResponse> SendAsync(IHttpRequest request, CancellationToken ct = default)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
 
             var tcs = new TaskCompletionSource<IHttpResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -128,8 +130,7 @@ namespace CurlUnity.Http
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
             _worker.Dispose();
 
             // Worker 已停止，所有未完成的 Task 设置异常

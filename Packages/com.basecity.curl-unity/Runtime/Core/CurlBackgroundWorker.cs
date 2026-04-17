@@ -12,7 +12,9 @@ namespace CurlUnity.Core
         private readonly ConcurrentQueue<CurlRequest> _pendingCancels = new();
         private Thread _thread;
         private volatile bool _stop;
-        private bool _disposed;
+        private int _disposedFlag;
+
+        private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
 
         public int PollTimeoutMs { get; set; } = 1000;
 
@@ -42,7 +44,7 @@ namespace CurlUnity.Core
 
         public void Send(CurlRequest request)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(CurlBackgroundWorker));
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlBackgroundWorker));
             _pendingRequests.Enqueue(request);
             _multi.Wakeup();
         }
@@ -53,15 +55,16 @@ namespace CurlUnity.Core
         /// </summary>
         public void Cancel(CurlRequest request)
         {
-            if (_disposed) return;
+            if (IsDisposed) return;
             _pendingCancels.Enqueue(request);
             _multi.Wakeup();
         }
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            // Interlocked 保证并发调用只有一个进入清理分支。
+            if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
+
             _stop = true;
             _multi.Wakeup();
             _thread?.Join(3000);

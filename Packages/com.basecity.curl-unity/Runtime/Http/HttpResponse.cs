@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using CurlUnity.Core;
 using CurlUnity.Native;
 
@@ -108,11 +109,11 @@ namespace CurlUnity.Http
 
         public void Dispose()
         {
-            if (_easyHandle != IntPtr.Zero)
-            {
-                _api.EasyCleanup(_easyHandle);
-                _easyHandle = IntPtr.Zero;
-            }
+            // Interlocked 保证并发 Dispose 只有一次真正执行 EasyCleanup，
+            // 避免 double-free。
+            var handle = Interlocked.Exchange(ref _easyHandle, IntPtr.Zero);
+            if (handle != IntPtr.Zero)
+                _api.EasyCleanup(handle);
         }
 
         internal bool TryGetInfoLong(int info, out long value)

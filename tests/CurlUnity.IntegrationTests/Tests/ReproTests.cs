@@ -8,6 +8,9 @@ using CurlUnity.IntegrationTests.Fixtures;
 using CurlUnity.Native;
 using Xunit;
 
+// CurlRequestState / CurlRequest.State are internal — accessible from the test
+// assembly because the source is compiled in via the csproj's Compile glob.
+
 namespace CurlUnity.IntegrationTests.Tests
 {
     [Collection("Integration")]
@@ -42,7 +45,7 @@ namespace CurlUnity.IntegrationTests.Tests
             worker.Cancel(request);
 
             Assert.True(
-                WaitUntil(() => GetPrivateBool(request, "_disposed"), TimeSpan.FromSeconds(1)),
+                WaitUntil(() => request.State == CurlRequestState.Disposed, TimeSpan.FromSeconds(1)),
                 "Cancel should be able to dispose the request before it is submitted.");
 
             worker.Send(request);

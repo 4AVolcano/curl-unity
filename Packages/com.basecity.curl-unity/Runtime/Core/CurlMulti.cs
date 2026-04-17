@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 #if UNITY_5_3_OR_NEWER
 using AOT;
 #endif
@@ -22,8 +23,10 @@ namespace CurlUnity.Core
     {
         private readonly ICurlApi _api;
         private IntPtr _multi;
-        private bool _disposed;
+        private int _disposedFlag;
         private readonly HashSet<CurlRequest> _activeRequests = new();
+
+        private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
 
         public CurlMulti()
             : this(CurlNativeApi.Instance)
@@ -41,13 +44,34 @@ namespace CurlUnity.Core
         /// <summary>
         /// 提交请求。自动配置 write/header callback 和 PRIVATE 关联。
         /// 提交后 CurlRequest 的生命周期由 CurlMulti 管理，完成后自动 Dispose。
+        /// <para>
+        /// 只有处于 <see cref="CurlRequestState.Created"/> 的请求会真正被送入
+        /// multi；已取消或已释放的请求会立即通过 OnComplete 以失败回调通知，
+        /// 永远不会触碰已释放的 easy handle。
+        /// </para>
+        /// <para>
         /// 如果底层 curl_multi_add_handle 失败，request 不会停留在活跃集合中，
         /// 会同步通过 <see cref="CurlRequest.OnComplete"/> 以 FailureException
         /// 通知调用方，避免 Task 永远悬挂。
+        /// </para>
         /// </summary>
         public void Send(CurlRequest request)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(CurlMulti));
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlMulti));
+
+            // 只有 Created 状态的请求允许进入 multi。对于已 Cancelled / Disposed /
+            // Completed 的请求，直接走失败回调，避免用已释放的 easy handle 调
+            // curl_multi_add_handle（undefined behavior）。
+            if (!request.TryTransitionState(CurlRequestState.Created, CurlRequestState.Submitted))
+            {
+                var state = request.State;
+                var ex = state == CurlRequestState.Cancelled
+                    ? (Exception)new OperationCanceledException("Request was cancelled before submission.")
+                    : new InvalidOperationException(
+                        $"Cannot submit CurlRequest in state {state}.");
+                FailComplete(request, ex);
+                return;
+            }
 
             request.SelfHandle = GCHandle.Alloc(request);
             var ptr = GCHandle.ToIntPtr(request.SelfHandle);
@@ -83,7 +107,7 @@ namespace CurlUnity.Core
 
         public void Tick()
         {
-            if (_disposed) return;
+            if (IsDisposed) return;
 
             var rc = _api.MultiPerform(_multi, out _);
             if (rc != CurlNative.CURLE_OK)
@@ -97,7 +121,7 @@ namespace CurlUnity.Core
 
         public void Poll(int timeoutMs)
         {
-            if (_disposed) return;
+            if (IsDisposed) return;
             var rc = _api.MultiPoll(_multi, IntPtr.Zero, 0, timeoutMs, out _);
             if (rc != CurlNative.CURLE_OK)
                 CurlLog.Warn($"curl_multi_poll returned {rc}: {_api.GetErrorString(rc)}");
@@ -106,25 +130,47 @@ namespace CurlUnity.Core
         /// <summary>线程安全，可从任意线程调用。</summary>
         public void Wakeup()
         {
-            if (_disposed) return;
+            if (IsDisposed) return;
             // wakeup 失败就只是少唤醒一次 poll；下一次 poll 自然会因 timeout 返回。
             _api.MultiWakeup(_multi);
         }
 
         /// <summary>
-        /// 从 multi 中移除并释放指定 easy handle。用于取消请求。
+        /// 取消请求。根据请求的当前状态决定具体动作：
+        /// <list type="bullet">
+        ///   <item><c>Created</c>: 尚未进 multi，直接标记 Cancelled 并通过 OnComplete
+        ///   通知，然后 Dispose。</item>
+        ///   <item><c>Submitted</c>: 已在 multi 中，先从 multi 移除再 Dispose；
+        ///   OnComplete 已由 <see cref="SendAsync 路径"/>上层的 CancellationToken
+        ///   回调做过 TrySetCanceled，这里只负责资源回收。</item>
+        ///   <item><c>Completed</c> / <c>Cancelled</c> / <c>Disposed</c>: 无操作。</item>
+        /// </list>
         /// 必须在驱动线程上调用（与 Tick 同一线程）。
         /// </summary>
         internal void Cancel(CurlRequest request)
         {
-            if (_disposed) return;
-            _activeRequests.Remove(request);
-            var rc = _api.MultiRemoveHandle(_multi, request.Handle);
-            // 未在 multi 中的 handle 会得到 CURLM_BAD_EASY_HANDLE 等非 0 值，属正常；
-            // 仅在预期失败时记录，不改变取消流程。
-            if (rc != CurlNative.CURLE_OK)
-                CurlLog.Warn($"curl_multi_remove_handle on cancel returned {rc}");
-            request.Dispose();
+            if (IsDisposed) return;
+
+            // 未提交就取消：直接走失败回调，不进 multi。
+            if (request.TryTransitionState(CurlRequestState.Created, CurlRequestState.Cancelled))
+            {
+                FailComplete(request,
+                    new OperationCanceledException("Request was cancelled before submission."));
+                return;
+            }
+
+            // 已提交：从 multi 中拔出，释放资源。
+            if (request.TryTransitionState(CurlRequestState.Submitted, CurlRequestState.Cancelled))
+            {
+                _activeRequests.Remove(request);
+                var rc = _api.MultiRemoveHandle(_multi, request.Handle);
+                if (rc != CurlNative.CURLE_OK)
+                    CurlLog.Warn($"curl_multi_remove_handle on cancel returned {rc}");
+                request.Dispose();
+                return;
+            }
+
+            // 其它状态（Completed / Cancelled / Disposed）无操作。
         }
 
         /// <summary>
@@ -151,8 +197,7 @@ namespace CurlUnity.Core
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
 
             // 清理所有仍在执行的请求（释放 GCHandle 和 easy handle）
             foreach (var request in _activeRequests)
