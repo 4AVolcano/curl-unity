@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 using CurlUnity.Core;
 using CurlUnity.Http;
 using CurlUnity.IntegrationTests.Fixtures;
-using CurlUnity.IntegrationTests.TestSupport;
 using CurlUnity.Native;
 using Xunit;
 
@@ -23,12 +22,10 @@ namespace CurlUnity.IntegrationTests.Tests
 
         public void Dispose() { }
 
-        [SkippableFact]
+        [Fact]
         [Trait("Category", "Repro")]
         public void CancelBeforeSend_ShouldNotLeaveDisposedRequestActiveInMulti()
         {
-            ReproGate.RequireEnabled();
-
             using var worker = new CurlBackgroundWorker
             {
                 PollTimeoutMs = 10
@@ -59,12 +56,10 @@ namespace CurlUnity.IntegrationTests.Tests
                 "A request disposed before send should not stay pending forever after Send.");
         }
 
-        [SkippableFact]
+        [Fact]
         [Trait("Category", "Repro")]
         public async Task RedirectHeaders_ShouldOnlyExposeFinalHopHeaders()
         {
-            ReproGate.RequireEnabled();
-
             using var client = new CurlHttpClient();
             client.PreferredVersion = HttpVersion.Default;
 

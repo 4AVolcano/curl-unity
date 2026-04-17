@@ -10,7 +10,7 @@ on:
     branches: [master]
 
 jobs:
-  integration-test:
+  test:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
+
+      - name: Run xUnit unit tests
+        run: dotnet test tests/CurlUnity.UnitTests/CurlUnity.UnitTests.csproj --configuration Release --logger "console;verbosity=normal"
 
       - name: Run xUnit integration tests
         run: dotnet test tests/CurlUnity.IntegrationTests/CurlUnity.IntegrationTests.csproj --configuration Release --logger "console;verbosity=normal"

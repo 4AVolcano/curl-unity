@@ -10,12 +10,10 @@ namespace CurlUnity.UnitTests.Tests
 {
     public class ReproTests
     {
-        [SkippableFact]
+        [Fact]
         [Trait("Category", "Repro")]
-        public async Task Constructor_ShouldFail_WhenGlobalInitFails()
+        public void Constructor_ShouldFail_WhenGlobalInitFails()
         {
-            ReproGate.RequireEnabled();
-
             var api = new FakeCurlApi
             {
                 CurlGlobalInitResult = 7
@@ -30,16 +28,13 @@ namespace CurlUnity.UnitTests.Tests
             finally
             {
                 client?.Dispose();
-                await Task.CompletedTask;
             }
         }
 
-        [SkippableFact]
+        [Fact]
         [Trait("Category", "Repro")]
         public async Task SendAsync_ShouldFailFast_WhenMultiAddHandleFails()
         {
-            ReproGate.RequireEnabled();
-
             var api = new FakeCurlApi
             {
                 MultiAddHandleResult = 9
@@ -61,12 +56,10 @@ namespace CurlUnity.UnitTests.Tests
             }
         }
 
-        [SkippableFact]
+        [Fact]
         [Trait("Category", "Repro")]
         public async Task BackgroundWorker_Dispose_ShouldWaitForBlockedPollThread()
         {
-            ReproGate.RequireEnabled();
-
             var api = new FakeCurlApi();
             using var pollEntered = new ManualResetEventSlim(false);
             using var releasePoll = new ManualResetEventSlim(false);
@@ -100,12 +93,10 @@ namespace CurlUnity.UnitTests.Tests
             }
         }
 
-        [SkippableFact]
+        [Fact]
         [Trait("Category", "Repro")]
         public async Task BackgroundWorker_Dispose_ShouldNotCleanupMulti_WhileDataCallbackIsStillRunning()
         {
-            ReproGate.RequireEnabled();
-
             var api = new FakeCurlApi();
             using var callbackEntered = new ManualResetEventSlim(false);
             using var releaseCallback = new ManualResetEventSlim(false);
