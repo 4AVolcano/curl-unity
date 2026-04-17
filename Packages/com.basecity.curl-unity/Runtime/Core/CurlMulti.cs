@@ -41,6 +41,9 @@ namespace CurlUnity.Core
         /// <summary>
         /// 提交请求。自动配置 write/header callback 和 PRIVATE 关联。
         /// 提交后 CurlRequest 的生命周期由 CurlMulti 管理，完成后自动 Dispose。
+        /// 如果底层 curl_multi_add_handle 失败，request 不会停留在活跃集合中，
+        /// 会同步通过 <see cref="CurlRequest.OnComplete"/> 以 FailureException
+        /// 通知调用方，避免 Task 永远悬挂。
         /// </summary>
         public void Send(CurlRequest request)
         {
@@ -68,14 +71,23 @@ namespace CurlUnity.Core
             CurlCerts.ApplyTo(request.Handle, _api);
 
             _activeRequests.Add(request);
-            _api.MultiAddHandle(_multi, request.Handle);
+            var rc = _api.MultiAddHandle(_multi, request.Handle);
+            if (rc != CurlNative.CURLE_OK)
+            {
+                _activeRequests.Remove(request);
+                var ex = new InvalidOperationException(
+                    $"curl_multi_add_handle failed (code {rc}): {_api.GetErrorString(rc)}");
+                FailComplete(request, ex);
+            }
         }
 
         public void Tick()
         {
             if (_disposed) return;
 
-            _api.MultiPerform(_multi, out _);
+            var rc = _api.MultiPerform(_multi, out _);
+            if (rc != CurlNative.CURLE_OK)
+                CurlLog.Warn($"curl_multi_perform returned {rc}: {_api.GetErrorString(rc)}");
 
             while (_api.MultiInfoRead(_multi, out var easyHandle, out var curlCode) == 1)
             {
@@ -86,13 +98,16 @@ namespace CurlUnity.Core
         public void Poll(int timeoutMs)
         {
             if (_disposed) return;
-            _api.MultiPoll(_multi, IntPtr.Zero, 0, timeoutMs, out _);
+            var rc = _api.MultiPoll(_multi, IntPtr.Zero, 0, timeoutMs, out _);
+            if (rc != CurlNative.CURLE_OK)
+                CurlLog.Warn($"curl_multi_poll returned {rc}: {_api.GetErrorString(rc)}");
         }
 
         /// <summary>线程安全，可从任意线程调用。</summary>
         public void Wakeup()
         {
             if (_disposed) return;
+            // wakeup 失败就只是少唤醒一次 poll；下一次 poll 自然会因 timeout 返回。
             _api.MultiWakeup(_multi);
         }
 
@@ -104,7 +119,33 @@ namespace CurlUnity.Core
         {
             if (_disposed) return;
             _activeRequests.Remove(request);
-            _api.MultiRemoveHandle(_multi, request.Handle);
+            var rc = _api.MultiRemoveHandle(_multi, request.Handle);
+            // 未在 multi 中的 handle 会得到 CURLM_BAD_EASY_HANDLE 等非 0 值，属正常；
+            // 仅在预期失败时记录，不改变取消流程。
+            if (rc != CurlNative.CURLE_OK)
+                CurlLog.Warn($"curl_multi_remove_handle on cancel returned {rc}");
+            request.Dispose();
+        }
+
+        /// <summary>
+        /// 把请求以"失败"状态送达 OnComplete，不经过 multi。用于提交前就已失败
+        /// 的路径（add_handle 失败、状态不允许提交等）。调用后释放 request 持有的
+        /// 资源（easy handle、slist、buffers）。
+        /// </summary>
+        private void FailComplete(CurlRequest request, Exception ex)
+        {
+            if (request.SelfHandle.IsAllocated)
+                request.SelfHandle.Free();
+
+            var resp = new CurlResponse
+            {
+                FailureException = ex,
+                // 失败时不转移 easy handle 所有权，下面 request.Dispose() 会清理它
+            };
+
+            try { request.OnComplete?.Invoke(resp); }
+            catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fail-complete: {cbEx}"); }
+
             request.Dispose();
         }
 

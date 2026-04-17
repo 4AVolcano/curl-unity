@@ -59,7 +59,19 @@ namespace CurlUnity.Http
             if (_disposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
 
             var tcs = new TaskCompletionSource<IHttpResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var curlReq = BuildCurlRequest(request);
+
+            CurlRequest curlReq;
+            try
+            {
+                curlReq = BuildCurlRequest(request);
+            }
+            catch (Exception ex)
+            {
+                // URL / setopt / slist_append 等前置配置失败，直接让 Task 以异常完成，
+                // 不进入 worker 队列。
+                tcs.TrySetException(ex);
+                return tcs.Task;
+            }
 
             _pendingTasks[tcs] = 0;
 
@@ -86,6 +98,14 @@ namespace CurlUnity.Http
 
                 try
                 {
+                    // Pipeline 未到 libcurl 就失败的路径（add_handle 失败、非法状态提交等），
+                    // 直接以异常 complete Task，不构造 HttpResponse。
+                    if (curlResp.FailureException != null)
+                    {
+                        tcs.TrySetException(curlResp.FailureException);
+                        return;
+                    }
+
                     var response = new HttpResponse(_api, curlResp);
                     Diagnostics?.Record(response);
 
@@ -127,28 +147,50 @@ namespace CurlUnity.Http
 
         private CurlRequest BuildCurlRequest(IHttpRequest request)
         {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
             var curlReq = new CurlRequest(_api);
+            try
+            {
+                ConfigureCurlRequest(curlReq, request);
+                return curlReq;
+            }
+            catch
+            {
+                // 配置过程中抛了异常，释放已分配的 easy handle / slist / buffers，
+                // 以免把半成品泄漏给调用方。
+                curlReq.Dispose();
+                throw;
+            }
+        }
+
+        private void ConfigureCurlRequest(CurlRequest curlReq, IHttpRequest request)
+        {
             var h = curlReq.Handle;
 
-            // URL
-            _api.SetOptString(h, CurlNative.CURLOPT_URL, request.Url);
+            // URL 是请求成立的前提；失败必须往外抛，不能偷偷走"URL 为空的 request"。
+            CheckSetOpt("CURLOPT_URL", _api.SetOptString(h, CurlNative.CURLOPT_URL, request.Url));
 
             // 禁用 libcurl 默认读取 HTTPS_PROXY/HTTP_PROXY 环境变量的行为，避免
             // 进程环境泄漏到网络配置（且 HTTP/3 本身无法经由 HTTP 代理）。
             // 显式 Proxy 支持后续作为独立特性开放。
-            _api.SetOptString(h, CurlNative.CURLOPT_PROXY, "");
+            CheckSetOpt("CURLOPT_PROXY", _api.SetOptString(h, CurlNative.CURLOPT_PROXY, ""));
 
             // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
-            _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1);
+            CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
 
             // HTTP version（枚举值与 curl 定义一致，直接 cast）
-            _api.SetOptLong(h, CurlNative.CURLOPT_HTTP_VERSION, (long)PreferredVersion);
+            CheckSetOpt("CURLOPT_HTTP_VERSION",
+                _api.SetOptLong(h, CurlNative.CURLOPT_HTTP_VERSION, (long)PreferredVersion));
 
             // SSL 验证
             if (!VerifySSL)
             {
-                _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYPEER, 0);
-                _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYHOST, 0);
+                CheckSetOpt("CURLOPT_SSL_VERIFYPEER",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYPEER, 0));
+                CheckSetOpt("CURLOPT_SSL_VERIFYHOST",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYHOST, 0));
             }
 
             // Method
@@ -157,26 +199,29 @@ namespace CurlUnity.Http
                 case HttpMethod.Get:
                     break; // GET 是默认
                 case HttpMethod.Post:
-                    _api.SetOptLong(h, CurlNative.CURLOPT_POST, 1);
+                    CheckSetOpt("CURLOPT_POST", _api.SetOptLong(h, CurlNative.CURLOPT_POST, 1));
                     break;
                 case HttpMethod.Head:
-                    _api.SetOptLong(h, CurlNative.CURLOPT_NOBODY, 1);
+                    CheckSetOpt("CURLOPT_NOBODY", _api.SetOptLong(h, CurlNative.CURLOPT_NOBODY, 1));
                     break;
                 default:
-                    _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
-                        request.Method.ToString().ToUpperInvariant());
+                    CheckSetOpt("CURLOPT_CUSTOMREQUEST",
+                        _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
+                            request.Method.ToString().ToUpperInvariant()));
                     break;
             }
 
             // Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容
             if (request.Body != null && request.Body.Length > 0)
             {
-                _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length);
+                CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
+                    _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length));
                 var pin = System.Runtime.InteropServices.GCHandle.Alloc(request.Body,
                     System.Runtime.InteropServices.GCHandleType.Pinned);
                 try
                 {
-                    _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject());
+                    CheckSetOpt("CURLOPT_COPYPOSTFIELDS",
+                        _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject()));
                 }
                 finally
                 {
@@ -189,35 +234,57 @@ namespace CurlUnity.Http
             {
                 var slist = IntPtr.Zero;
                 foreach (var kv in request.Headers)
-                    slist = _api.SListAppend(slist, $"{kv.Key}: {kv.Value}");
+                {
+                    var next = _api.SListAppend(slist, $"{kv.Key}: {kv.Value}");
+                    if (next == IntPtr.Zero)
+                    {
+                        // slist_append 返回 NULL 通常是 OOM。已积累的节点由 curlReq 最终 Dispose
+                        // 时释放——我们先把当前 slist 挂上去，保证错误路径也能回收。
+                        if (slist != IntPtr.Zero)
+                            curlReq.HeaderSlist = slist;
+                        throw new InvalidOperationException(
+                            $"curl_slist_append returned null while building header for key '{kv.Key}'");
+                    }
+                    slist = next;
+                }
 
                 if (slist != IntPtr.Zero)
                 {
                     curlReq.HeaderSlist = slist;
-                    _api.SetOptPtr(h, CurlNative.CURLOPT_HTTPHEADER, slist);
+                    CheckSetOpt("CURLOPT_HTTPHEADER",
+                        _api.SetOptPtr(h, CurlNative.CURLOPT_HTTPHEADER, slist));
                 }
             }
 
             // Timeouts
             if (request.ConnectTimeoutMs > 0)
-                _api.SetOptLong(h, CurlNative.CURLOPT_CONNECTTIMEOUT_MS, request.ConnectTimeoutMs);
+                CheckSetOpt("CURLOPT_CONNECTTIMEOUT_MS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_CONNECTTIMEOUT_MS, request.ConnectTimeoutMs));
             if (request.TimeoutMs > 0)
-                _api.SetOptLong(h, CurlNative.CURLOPT_TIMEOUT_MS, request.TimeoutMs);
+                CheckSetOpt("CURLOPT_TIMEOUT_MS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_TIMEOUT_MS, request.TimeoutMs));
 
             // Follow redirects
-            _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1);
+            CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
 
             // Cookies
             if (request.EnableCookies)
-                _api.SetOptString(h, CurlNative.CURLOPT_COOKIELIST, "");
+                CheckSetOpt("CURLOPT_COOKIELIST",
+                    _api.SetOptString(h, CurlNative.CURLOPT_COOKIELIST, ""));
 
             // Response headers capture
             curlReq.CaptureHeaders = request.EnableResponseHeaders;
 
             // Streaming
             curlReq.DataCallback = request.OnDataReceived;
+        }
 
-            return curlReq;
+        private void CheckSetOpt(string optName, int rc)
+        {
+            if (rc == CurlNative.CURLE_OK) return;
+            throw new InvalidOperationException(
+                $"curl_easy_setopt({optName}) failed (code {rc}): {_api.GetErrorString(rc)}");
         }
     }
 }
