@@ -98,7 +98,7 @@ namespace CurlUnity.Core
         /// 并记录一条错误日志——multi handle 由 OS 在进程退出时回收。
         /// </para>
         /// <para>
-        /// 契约：<see cref="IHttpRequest.OnDataReceived"/> 必须快速返回。
+        /// 契约：<c>CurlUnity.Http.IHttpRequest.OnDataReceived</c> 必须快速返回。
         /// </para>
         /// </summary>
         public void Dispose()

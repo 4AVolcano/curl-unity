@@ -111,8 +111,10 @@ namespace CurlUnity.UnitTests.Tests
                 api.InvokeWriteCallback(handle, new byte[] { 1, 2, 3 });
             };
 
-            var worker = new CurlBackgroundWorker(api) { PollTimeoutMs = pollTimeoutMs };
-            var request = new CurlRequest(api)
+            // 用 `using var` 保证即使断言在 Wait 阶段就 fail，worker/request 也能被
+            // 清理——否则 worker 后台线程会留在进程里，污染后续测试状态。
+            using var worker = new CurlBackgroundWorker(api) { PollTimeoutMs = pollTimeoutMs };
+            using var request = new CurlRequest(api)
             {
                 DataCallback = (_, _, _) =>
                 {
@@ -151,10 +153,12 @@ namespace CurlUnity.UnitTests.Tests
             }
             finally
             {
+                // 解除用户回调阻塞。无论测试走到哪一步，这里一定要 Set：如果还没
+                // Set 就进入 `using var` 的 worker.Dispose()，worker 会因回调仍
+                // 挂住而吃满 joinTimeout，拖慢测试套件。
                 releaseCallback.Set();
                 if (disposeTask != null)
                     await disposeTask.WaitAsync(TimeSpan.FromSeconds(5));
-                request.Dispose();
             }
         }
     }
