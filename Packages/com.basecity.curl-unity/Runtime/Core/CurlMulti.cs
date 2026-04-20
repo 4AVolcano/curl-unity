@@ -77,21 +77,26 @@ namespace CurlUnity.Core
             var ptr = GCHandle.ToIntPtr(request.SelfHandle);
 
             // write callback: 流式模式转发到 DataCallback，否则写入 BodyBuffer
-            _api.SetOptWriteFunction(request.Handle, OnWriteData);
-            _api.SetOptWriteData(request.Handle, ptr);
+            if (!TrySetOpt("CURLOPT_WRITEFUNCTION",
+                    _api.SetOptWriteFunction(request.Handle, OnWriteData), request)) return;
+            if (!TrySetOpt("CURLOPT_WRITEDATA",
+                    _api.SetOptWriteData(request.Handle, ptr), request)) return;
 
             // header callback: 仅在 CaptureHeaders 时设置
             if (request.CaptureHeaders)
             {
                 request.HeaderBuffer = new MemoryStream(2048);
-                _api.SetOptHeaderFunction(request.Handle, OnHeaderData);
-                _api.SetOptHeaderData(request.Handle, ptr);
+                if (!TrySetOpt("CURLOPT_HEADERFUNCTION",
+                        _api.SetOptHeaderFunction(request.Handle, OnHeaderData), request)) return;
+                if (!TrySetOpt("CURLOPT_HEADERDATA",
+                        _api.SetOptHeaderData(request.Handle, ptr), request)) return;
             }
 
             // PRIVATE 关联
-            _api.SetOptPtr(request.Handle, CurlNative.CURLOPT_PRIVATE, ptr);
+            if (!TrySetOpt("CURLOPT_PRIVATE",
+                    _api.SetOptPtr(request.Handle, CurlNative.CURLOPT_PRIVATE, ptr), request)) return;
 
-            // CA 证书
+            // CA 证书 —— 失败不 fatal，但会影响 TLS 验证行为；由 CurlCerts 自己日志化
             CurlCerts.ApplyTo(request.Handle, _api);
 
             _activeRequests.Add(request);
@@ -103,6 +108,21 @@ namespace CurlUnity.Core
                     $"curl_multi_add_handle failed (code {rc}): {_api.GetErrorString(rc)}");
                 FailComplete(request, ex);
             }
+        }
+
+        /// <summary>
+        /// 检查 multi 内部 setopt 调用的返回值。失败时走 FailComplete 并返回 false，
+        /// 调用方据此 return 终止 Send，避免把一个半配置好的 request 送进 multi。
+        /// </summary>
+        private bool TrySetOpt(string optName, int rc, CurlRequest request)
+        {
+            if (rc == CurlNative.CURLE_OK) return true;
+
+            // 这里还没进 _activeRequests，不需要 Remove
+            var ex = new InvalidOperationException(
+                $"curl_easy_setopt({optName}) failed (code {rc}): {_api.GetErrorString(rc)}");
+            FailComplete(request, ex);
+            return false;
         }
 
         public void Tick()
@@ -159,13 +179,24 @@ namespace CurlUnity.Core
                 return;
             }
 
-            // 已提交：从 multi 中拔出，释放资源。
+            // 已提交：先尝试从 multi 中拔出；只有成功后才能安全释放 easy handle 资源。
             if (request.TryTransitionState(CurlRequestState.Submitted, CurlRequestState.Cancelled))
             {
-                _activeRequests.Remove(request);
                 var rc = _api.MultiRemoveHandle(_multi, request.Handle);
                 if (rc != CurlNative.CURLE_OK)
-                    CurlLog.Warn($"curl_multi_remove_handle on cancel returned {rc}");
+                {
+                    // Remove 失败说明 multi 可能仍持有这个 easy handle。这时 Dispose 会
+                    // 调 curl_easy_cleanup，释放一个 multi 还在用的 handle → UAF。
+                    // 采用"泄漏优于崩溃"策略：保留 request 在 _activeRequests 里，等
+                    // _multi.Dispose 时再尝试清理；如果那时仍失败，handle 就随进程退出
+                    // 由 OS 回收。
+                    CurlLog.Error(
+                        $"curl_multi_remove_handle on cancel returned {rc}; leaving easy handle attached " +
+                        $"to multi to avoid use-after-free. It will be reclaimed when multi is disposed.");
+                    return;
+                }
+
+                _activeRequests.Remove(request);
                 request.Dispose();
                 return;
             }
@@ -216,7 +247,21 @@ namespace CurlUnity.Core
 
         private void ProcessCompletion(IntPtr easyHandle, int curlCode)
         {
-            _api.GetInfoString(easyHandle, CurlNative.CURLINFO_PRIVATE, out var ptr);
+            // CURLINFO_PRIVATE 是我们在 Send 时通过 CURLOPT_PRIVATE 设置的
+            // GCHandle 指针。这里取回它来定位 CurlRequest；取不到就意味着
+            // multi 传进来一个不由我们管理的 easy handle（不该发生，防御）
+            // —— 记录告警并直接 remove 该 handle，避免把 null/garbage 指针
+            // 喂给 GCHandle.FromIntPtr 导致 crash。
+            var rc = _api.GetInfoString(easyHandle, CurlNative.CURLINFO_PRIVATE, out var ptr);
+            if (rc != CurlNative.CURLE_OK || ptr == IntPtr.Zero)
+            {
+                CurlLog.Error(
+                    $"ProcessCompletion: failed to resolve CurlRequest from easy handle " +
+                    $"(CURLINFO_PRIVATE rc={rc}, ptr={ptr}). Removing stray handle from multi.");
+                _api.MultiRemoveHandle(_multi, easyHandle);
+                return;
+            }
+
             var request = (CurlRequest)GCHandle.FromIntPtr(ptr).Target;
 
             _activeRequests.Remove(request);

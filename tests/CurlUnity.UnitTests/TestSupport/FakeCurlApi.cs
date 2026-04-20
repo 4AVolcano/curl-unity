@@ -209,7 +209,10 @@ namespace CurlUnity.UnitTests.TestSupport
         public int MultiRemoveHandle(IntPtr multi, IntPtr easy)
         {
             var result = MultiRemoveHandleResult;
-            if (_multiHandles.TryGetValue(multi, out var state))
+            // 与 libcurl 语义一致：仅在调用成功时 handle 才真正离开 multi。
+            // 非 OK 返回意味着 multi 还持有这个 handle，Fake 必须保留它以便
+            // 测试能观察到"remove 失败的请求仍然活跃"这一真实产品行为。
+            if (result == CurlNative.CURLE_OK && _multiHandles.TryGetValue(multi, out var state))
                 state.ActiveHandles.Remove(easy);
             return result;
         }
