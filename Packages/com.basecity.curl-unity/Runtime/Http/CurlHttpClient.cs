@@ -20,6 +20,12 @@ namespace CurlUnity.Http
     /// 开发/宿主机上的代理泄漏到业务网络配置，且 HTTP/3 本身无法经由 HTTP 代理。
     /// 显式代理支持作为独立特性后续提供（见项目 Roadmap 的 Proxy 任务）。
     /// </para>
+    /// <para>
+    /// <b>Cookie 行为：</b><see cref="IHttpRequest.EnableCookies"/> 为 <c>true</c>
+    /// 的请求接入本 client 的 cookie jar（基于 <c>CURLSH</c>），跨请求持久化。
+    /// 不同 <c>CurlHttpClient</c> 实例各自持有独立 jar，互不共享。<c>EnableCookies=false</c>
+    /// 的请求既不读也不写 jar。jar 为纯内存存储，client Dispose 后清空。
+    /// </para>
     /// </remarks>
     public class CurlHttpClient : IHttpClient
     {
@@ -27,6 +33,7 @@ namespace CurlUnity.Http
         private readonly CurlBackgroundWorker _worker;
         private readonly ConcurrentDictionary<IntPtr, CancellationTokenRegistration> _cancellations = new();
         private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, byte> _pendingTasks = new();
+        private CurlCookieJar _cookieJar;  // lazy：首次用到 EnableCookies 时初始化
         private int _disposedFlag;
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
@@ -154,21 +161,23 @@ namespace CurlUnity.Http
                 kv.Value.Dispose();
             _cancellations.Clear();
 
-            // 只有在 worker 线程确实已退出的情况下才敢 Release 全局引用计数。
+            // 只有在 worker 线程确实已退出的情况下才敢清理 share/release 全局引用计数。
             // 否则可能触发 curl_global_cleanup 时 worker 仍在 libcurl 内部
             // （被用户回调卡住），与 global state 发生 use-after-free。
-            // 与 Worker 里"跳过 multi cleanup"的策略保持一致：泄漏全局 init
-            // 一次不会因为还有其它 client 而立刻触发 cleanup 的也只是推迟；
-            // 如果本进程本来就要退出，OS 回收也足够。
+            // share handle 同理：若有 easy handle 仍附在 share 上 perform，
+            // share_cleanup 会返回 CURLSHE_IN_USE / 与 native 状态竞争。
+            // 与 Worker 里"跳过 multi cleanup"的策略保持一致：泄漏一次不会
+            // 导致其它客户端故障；进程退出时 OS 会回收所有内存。
             if (_worker.WorkerExitedCleanly)
             {
+                _cookieJar?.Dispose();
                 CurlGlobal.Release(_api);
             }
             else
             {
                 CurlLog.Error(
-                    "CurlHttpClient.Dispose: worker did not exit cleanly; skipping CurlGlobal.Release to avoid " +
-                    "curl_global_cleanup racing with the worker thread that is still inside libcurl.");
+                    "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
+                    "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
             }
         }
 
@@ -295,16 +304,32 @@ namespace CurlUnity.Http
             CheckSetOpt("CURLOPT_FOLLOWLOCATION",
                 _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
 
-            // Cookies
+            // Cookies：挂到 client 共享 jar 上 + 激活 cookie engine。
+            // 注意：这里不能用 CURLOPT_COOKIELIST=""（那是"清空 jar"指令，会擦掉其他
+            // handle 刚写入的 cookie）。COOKIEFILE="" 只激活引擎、不读文件。
             if (request.EnableCookies)
-                CheckSetOpt("CURLOPT_COOKIELIST",
-                    _api.SetOptString(h, CurlNative.CURLOPT_COOKIELIST, ""));
+            {
+                EnsureCookieJar();
+                CheckSetOpt("CURLOPT_SHARE",
+                    _api.SetOptPtr(h, CurlNative.CURLOPT_SHARE, _cookieJar.Handle));
+                CheckSetOpt("CURLOPT_COOKIEFILE",
+                    _api.SetOptString(h, CurlNative.CURLOPT_COOKIEFILE, ""));
+            }
 
             // Response headers capture
             curlReq.CaptureHeaders = request.EnableResponseHeaders;
 
             // Streaming
             curlReq.DataCallback = request.OnDataReceived;
+        }
+
+        private void EnsureCookieJar()
+        {
+            if (_cookieJar != null) return;
+            // 允许并发首次请求；CompareExchange 输的一方本地构造的 jar 需被清理。
+            var fresh = new CurlCookieJar(_api);
+            if (Interlocked.CompareExchange(ref _cookieJar, fresh, null) != null)
+                fresh.Dispose();
         }
 
         private void CheckSetOpt(string optName, int rc)

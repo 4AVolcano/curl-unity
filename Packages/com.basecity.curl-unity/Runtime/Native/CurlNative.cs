@@ -47,7 +47,27 @@ namespace CurlUnity.Native
         public const int CURLOPT_ALTSVC = 10230;
         public const int CURLOPT_CONNECTTIMEOUT_MS = 156;
         public const int CURLOPT_TIMEOUT_MS = 155;
+        public const int CURLOPT_COOKIEFILE = 10031;
+        public const int CURLOPT_COOKIEJAR = 10082;
         public const int CURLOPT_COOKIELIST = 10135;
+        public const int CURLOPT_SHARE = 10100;
+
+        // CURLSHoption — 值来自 deps/curl/include/curl/curl.h 里的 enum CURLSHoption
+        public const int CURLSHOPT_SHARE = 1;
+        public const int CURLSHOPT_UNSHARE = 2;
+        public const int CURLSHOPT_LOCKFUNC = 3;
+        public const int CURLSHOPT_UNLOCKFUNC = 4;
+        public const int CURLSHOPT_USERDATA = 5;
+
+        // curl_lock_data — 共享数据类型
+        public const int CURL_LOCK_DATA_COOKIE = 2;
+
+        // curl_lock_access — lock 回调传入；unlock 回调不传，所以我们用单一 Monitor
+        public const int CURL_LOCK_ACCESS_SHARED = 1;
+        public const int CURL_LOCK_ACCESS_SINGLE = 2;
+
+        // CURLSHcode
+        public const int CURLSHE_OK = 0;
         public const int CURLOPT_COPYPOSTFIELDS = 10165;
         public const int CURLOPT_POSTFIELDSIZE_LARGE = 30120;
         public const int CURLOPT_POST = 47;
@@ -94,6 +114,14 @@ namespace CurlUnity.Native
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate UIntPtr WriteCallback(IntPtr ptr, UIntPtr size, UIntPtr nmemb, IntPtr userdata);
 
+        // curl_lock_function: void (*)(CURL *handle, curl_lock_data data, curl_lock_access access, void *userptr)
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void ShareLockCallback(IntPtr handle, int data, int access, IntPtr userdata);
+
+        // curl_unlock_function: void (*)(CURL *handle, curl_lock_data data, void *userptr)
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void ShareUnlockCallback(IntPtr handle, int data, IntPtr userdata);
+
         /* ==============================================================
          * Direct libcurl calls (non-variadic, safe on all platforms)
          * ============================================================== */
@@ -131,6 +159,19 @@ namespace CurlUnity.Native
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern void curl_free(IntPtr ptr);
+
+        /* ==============================================================
+         * curl_share — non-variadic, direct P/Invoke
+         * ============================================================== */
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr curl_share_init();
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_share_cleanup(IntPtr share);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr curl_share_strerror(int code);
 
         /* ==============================================================
          * Bridge wrappers (for variadic curl_easy_setopt / curl_easy_getinfo)
@@ -209,6 +250,16 @@ namespace CurlUnity.Native
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern int curl_unity_multi_setopt_long(IntPtr multi, int option, long value);
 
+        /* ==============================================================
+         * curl_share — bridge wrappers (variadic curl_share_setopt)
+         * ============================================================== */
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_unity_share_setopt_long(IntPtr share, int option, long value);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_unity_share_setopt_ptr(IntPtr share, int option, IntPtr value);
+
         /// <summary>
         /// Wraps curl_multi_info_read. Returns 1 if a completed handle was found.
         /// </summary>
@@ -249,5 +300,11 @@ namespace CurlUnity.Native
         /// </summary>
         public static string GetMultiErrorString(int code)
             => Marshal.PtrToStringAnsi(curl_multi_strerror(code)) ?? "";
+
+        /// <summary>
+        /// 把 <c>CURLSHcode</c>（<c>curl_share_*</c> 系列函数的返回值）转成文本。
+        /// </summary>
+        public static string GetShareErrorString(int code)
+            => Marshal.PtrToStringAnsi(curl_share_strerror(code)) ?? "";
     }
 }

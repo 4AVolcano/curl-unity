@@ -114,6 +114,20 @@ BRIDGE_API int curl_unity_multi_setopt_long(CURLM *multi, int option, int64_t va
 }
 
 /*
+ * curl_share_setopt is variadic, so wrap it for P/Invoke.
+ * curl_share_init / curl_share_cleanup are non-variadic — P/Invoke directly.
+ */
+BRIDGE_API int curl_unity_share_setopt_long(CURLSH *share, int option, int64_t value)
+{
+    return (int)curl_share_setopt(share, (CURLSHoption)option, (long)value);
+}
+
+BRIDGE_API int curl_unity_share_setopt_ptr(CURLSH *share, int option, void *value)
+{
+    return (int)curl_share_setopt(share, (CURLSHoption)option, value);
+}
+
+/*
  * Wraps curl_multi_info_read to avoid marshaling the CURLMsg struct.
  * Returns 1 if a completed message was found, 0 otherwise.
  */

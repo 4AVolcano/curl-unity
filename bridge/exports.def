@@ -17,6 +17,7 @@ EXPORTS
     curl_easy_perform
     curl_easy_strerror
     curl_easy_reset
+    curl_multi_strerror
     curl_version
     curl_slist_append
     curl_slist_free_all
@@ -28,6 +29,9 @@ EXPORTS
     curl_multi_perform
     curl_multi_poll
     curl_multi_wakeup
+    curl_share_init
+    curl_share_cleanup
+    curl_share_strerror
 
     ; bridge — variadic wrappers
     curl_unity_setopt_string
@@ -44,3 +48,5 @@ EXPORTS
     curl_unity_getinfo_off_t
     curl_unity_multi_setopt_long
     curl_unity_multi_info_read
+    curl_unity_share_setopt_long
+    curl_unity_share_setopt_ptr

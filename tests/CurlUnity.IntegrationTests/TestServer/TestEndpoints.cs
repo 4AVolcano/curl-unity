@@ -61,6 +61,24 @@ namespace CurlUnity.IntegrationTests.TestServer
                 return Results.Json(new { hasCookie, value });
             });
 
+            // Cookie: set a named cookie with given value (Path=/)
+            app.MapGet("/set-cookie/{name}/{value}", (string name, string value, HttpContext ctx) =>
+            {
+                ctx.Response.Cookies.Append(name, value, new CookieOptions
+                {
+                    Path = "/",
+                    HttpOnly = false,
+                });
+                return Results.Text($"{name}={value}");
+            });
+
+            // Cookie: return all cookies received on this request as JSON dictionary
+            app.MapGet("/cookies", (HttpRequest req) =>
+            {
+                var dict = req.Cookies.ToDictionary(c => c.Key, c => c.Value);
+                return Results.Json(dict);
+            });
+
             // Cookie: set cookie then redirect to /check-cookie (same easy handle)
             app.MapGet("/set-cookie-and-redirect", (HttpContext ctx) =>
             {

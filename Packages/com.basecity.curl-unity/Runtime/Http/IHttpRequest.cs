@@ -19,7 +19,22 @@ namespace CurlUnity.Http
         /// <summary>是否捕获响应头。默认 false。</summary>
         bool EnableResponseHeaders { get; set; }
 
-        /// <summary>是否启用 curl cookie 引擎（跨请求自动管理 cookie）。默认 false。</summary>
+        /// <summary>
+        /// 是否接入所属 <see cref="IHttpClient"/> 的共享 cookie jar。默认 false。
+        /// <para>
+        /// 为 <c>true</c> 时：服务端 <c>Set-Cookie</c> 写入 jar、后续请求自动回发匹配 cookie，
+        /// 在 <b>同一个 <see cref="IHttpClient"/> 实例</b> 内跨请求持久化。
+        /// 不同 client 实例的 jar 互相独立。
+        /// </para>
+        /// <para>
+        /// 为 <c>false</c> 时：cookie engine 完全不启用 —— 本次请求既不读 jar 也不写 jar
+        /// （即便 client 的 jar 已有条目也不会带出），且同一请求 redirect 链内的 <c>Set-Cookie</c>
+        /// 也不会被解析回发。需要这两种行为之一时请置 <c>true</c>。
+        /// </para>
+        /// <para>
+        /// jar 为纯内存存储，client Dispose 后清空；暂不支持文件持久化。
+        /// </para>
+        /// </summary>
         bool EnableCookies { get; set; }
 
         /// <summary>

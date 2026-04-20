@@ -27,6 +27,11 @@ namespace CurlUnity.Native
         int GetInfoDouble(IntPtr handle, int info, out double value);
         int GetInfoOffT(IntPtr handle, int info, out long value);
 
+        IntPtr ShareInit();
+        int ShareCleanup(IntPtr share);
+        int ShareSetOptLong(IntPtr share, int option, long value);
+        int ShareSetOptPtr(IntPtr share, int option, IntPtr value);
+
         IntPtr MultiInit();
         int MultiCleanup(IntPtr multi);
         int MultiAddHandle(IntPtr multi, IntPtr easy);
@@ -41,5 +46,8 @@ namespace CurlUnity.Native
 
         /// <summary><c>curl_multi_strerror</c> 等价物，用于 <c>CURLMcode</c>（multi 系列返回值）。</summary>
         string GetMultiErrorString(int code);
+
+        /// <summary><c>curl_share_strerror</c> 等价物，用于 <c>CURLSHcode</c>（share 系列返回值）。</summary>
+        string GetShareErrorString(int code);
     }
 }
