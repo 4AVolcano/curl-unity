@@ -1,4 +1,4 @@
-using System.Threading;
+using System;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
@@ -14,19 +14,39 @@ namespace CurlUnity.Core
 
         public static void Acquire()
         {
+            Acquire(CurlNativeApi.Instance);
+        }
+
+        internal static void Acquire(ICurlApi api)
+        {
             lock (_lock)
             {
-                if (_refCount++ == 0)
-                    CurlNative.curl_global_init(CurlNative.CURL_GLOBAL_DEFAULT);
+                if (_refCount == 0)
+                {
+                    var rc = api.CurlGlobalInit(CurlNative.CURL_GLOBAL_DEFAULT);
+                    if (rc != CurlNative.CURLE_OK)
+                    {
+                        // init 失败不递增引用计数，否则 Release 会调 cleanup 一个未初始化的库。
+                        throw new InvalidOperationException(
+                            $"curl_global_init failed (code {rc}): {api.GetErrorString(rc)}");
+                    }
+                }
+                _refCount++;
             }
         }
 
         public static void Release()
         {
+            Release(CurlNativeApi.Instance);
+        }
+
+        internal static void Release(ICurlApi api)
+        {
             lock (_lock)
             {
+                if (_refCount == 0) return; // 被过度 Release，保护性忽略
                 if (--_refCount == 0)
-                    CurlNative.curl_global_cleanup();
+                    api.CurlGlobalCleanup();
             }
         }
     }

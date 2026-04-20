@@ -102,6 +102,40 @@ namespace CurlUnity.IntegrationTests.TestServer
                 return Results.Redirect($"{baseUrl}/redirect/{n - 1}");
             });
 
+            app.MapGet("/redirect-with-headers/{n:int}", (int n, HttpContext ctx) =>
+            {
+                if (n <= 0)
+                {
+                    ctx.Response.Headers["X-Final-Hop"] = "0";
+                    return Results.Text("final");
+                }
+
+                ctx.Response.Headers["X-Intermediate-Hop"] = n.ToString();
+                var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                return Results.Redirect($"{baseUrl}/redirect-with-headers/{n - 1}");
+            });
+
+            // 用于验证 libcurl 在 FOLLOWLOCATION=1 下，对中间 3xx 响应
+            // 的 body 是否会调 write callback 的实证端点。
+            // 中间响应返回带 Location 头 + 非空 body（"intermediate-body-N"），
+            // 最终响应 200 body 固定是 "final-body"。
+            app.MapGet("/redirect-with-body/{n:int}", async (int n, HttpContext ctx) =>
+            {
+                if (n <= 0)
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "text/plain";
+                    await ctx.Response.WriteAsync("final-body");
+                    return;
+                }
+
+                var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                ctx.Response.StatusCode = 302;
+                ctx.Response.Headers["Location"] = $"{baseUrl}/redirect-with-body/{n - 1}";
+                ctx.Response.ContentType = "text/plain";
+                await ctx.Response.WriteAsync($"intermediate-body-{n}");
+            });
+
             app.MapGet("/custom-headers", (HttpContext ctx) =>
             {
                 ctx.Response.Headers["X-Custom-One"] = "value1";

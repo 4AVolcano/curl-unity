@@ -42,18 +42,29 @@ namespace CurlUnity.Core
         /// </summary>
         public static void ApplyTo(IntPtr handle)
         {
+            ApplyTo(handle, CurlNativeApi.Instance);
+        }
+
+        internal static void ApplyTo(IntPtr handle, ICurlApi api)
+        {
             if (handle == IntPtr.Zero) return;
 
-            // Android: use extracted PEM file
+            // Android: use extracted PEM file.
+            // 失败仅 log warn，不阻止请求继续——后续 TLS 层的失败会比"静默改变信任
+            // 行为"更容易被调用方察觉；强行中止请求反而会掩盖 rc 背后的真实原因。
             if (!string.IsNullOrEmpty(_caCertPath))
             {
-                CurlNative.curl_unity_setopt_string(handle, CurlNative.CURLOPT_CAINFO, _caCertPath);
+                var rc = api.SetOptString(handle, CurlNative.CURLOPT_CAINFO, _caCertPath);
+                if (rc != CurlNative.CURLE_OK)
+                    CurlLog.Warn($"CurlCerts.ApplyTo: CURLOPT_CAINFO returned {rc}; CA store may not be applied as expected.");
             }
 
 #if UNITY_STANDALONE_WIN || UNITY_WSA
             // Windows: use native certificate store via CryptoAPI (curl 7.71.0+)
-            CurlNative.curl_unity_setopt_long(handle, CurlNative.CURLOPT_SSL_OPTIONS,
+            var rcSsl = api.SetOptLong(handle, CurlNative.CURLOPT_SSL_OPTIONS,
                 CurlNative.CURLSSLOPT_NATIVE_CA);
+            if (rcSsl != CurlNative.CURLE_OK)
+                CurlLog.Warn($"CurlCerts.ApplyTo: CURLOPT_SSL_OPTIONS (NATIVE_CA) returned {rcSsl}; system cert store may not be in use.");
 #endif
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using CurlUnity.Core;
 using CurlUnity.Native;
 
@@ -9,6 +10,7 @@ namespace CurlUnity.Http
 {
     internal class HttpResponse : IHttpResponse
     {
+        private readonly ICurlApi _api;
         private IntPtr _easyHandle;
         private readonly int _curlCode;
         private readonly long _statusCode;
@@ -17,7 +19,13 @@ namespace CurlUnity.Http
         private IReadOnlyDictionary<string, string[]> _parsedHeaders;
 
         internal HttpResponse(CurlResponse raw)
+            : this(CurlNativeApi.Instance, raw)
         {
+        }
+
+        internal HttpResponse(ICurlApi api, CurlResponse raw)
+        {
+            _api = api ?? throw new ArgumentNullException(nameof(api));
             _easyHandle = raw.EasyHandle;
             _curlCode = raw.CurlCode;
             _statusCode = raw.StatusCode;
@@ -37,8 +45,7 @@ namespace CurlUnity.Http
             get
             {
                 if (_curlCode == CurlNative.CURLE_OK) return null;
-                var ptr = CurlNative.curl_easy_strerror(_curlCode);
-                return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return _api.GetErrorString(_curlCode);
             }
         }
 
@@ -46,8 +53,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (_easyHandle == IntPtr.Zero) return HttpVersion.Default;
-                CurlNative.curl_unity_getinfo_long(_easyHandle, CurlNative.CURLINFO_HTTP_VERSION, out var v);
+                if (!TryGetInfoLong(CurlNative.CURLINFO_HTTP_VERSION, out var v)) return HttpVersion.Default;
                 return (HttpVersion)(int)v;
             }
         }
@@ -60,8 +66,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (_easyHandle == IntPtr.Zero) return null;
-                CurlNative.curl_unity_getinfo_string(_easyHandle, CurlNative.CURLINFO_CONTENT_TYPE, out var ptr);
+                if (!TryGetInfoString(CurlNative.CURLINFO_CONTENT_TYPE, out var ptr)) return null;
                 return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
             }
         }
@@ -70,8 +75,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (_easyHandle == IntPtr.Zero) return -1;
-                CurlNative.curl_unity_getinfo_off_t(_easyHandle, CurlNative.CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, out var v);
+                if (!TryGetInfoOffT(CurlNative.CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, out var v)) return -1;
                 return v;
             }
         }
@@ -80,8 +84,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (_easyHandle == IntPtr.Zero) return null;
-                CurlNative.curl_unity_getinfo_string(_easyHandle, CurlNative.CURLINFO_EFFECTIVE_URL, out var ptr);
+                if (!TryGetInfoString(CurlNative.CURLINFO_EFFECTIVE_URL, out var ptr)) return null;
                 return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
             }
         }
@@ -90,8 +93,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (_easyHandle == IntPtr.Zero) return 0;
-                CurlNative.curl_unity_getinfo_long(_easyHandle, CurlNative.CURLINFO_REDIRECT_COUNT, out var v);
+                if (!TryGetInfoLong(CurlNative.CURLINFO_REDIRECT_COUNT, out var v)) return 0;
                 return (int)v;
             }
         }
@@ -107,11 +109,32 @@ namespace CurlUnity.Http
 
         public void Dispose()
         {
-            if (_easyHandle != IntPtr.Zero)
-            {
-                CurlNative.curl_easy_cleanup(_easyHandle);
-                _easyHandle = IntPtr.Zero;
-            }
+            // Interlocked 保证并发 Dispose 只有一次真正执行 EasyCleanup，
+            // 避免 double-free。
+            var handle = Interlocked.Exchange(ref _easyHandle, IntPtr.Zero);
+            if (handle != IntPtr.Zero)
+                _api.EasyCleanup(handle);
+        }
+
+        internal bool TryGetInfoLong(int info, out long value)
+        {
+            value = 0;
+            if (_easyHandle == IntPtr.Zero) return false;
+            return _api.GetInfoLong(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+        }
+
+        internal bool TryGetInfoString(int info, out IntPtr value)
+        {
+            value = IntPtr.Zero;
+            if (_easyHandle == IntPtr.Zero) return false;
+            return _api.GetInfoString(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+        }
+
+        internal bool TryGetInfoOffT(int info, out long value)
+        {
+            value = 0;
+            if (_easyHandle == IntPtr.Zero) return false;
+            return _api.GetInfoOffT(_easyHandle, info, out value) == CurlNative.CURLE_OK;
         }
 
         private static IReadOnlyDictionary<string, string[]> ParseHeaders(byte[] raw)

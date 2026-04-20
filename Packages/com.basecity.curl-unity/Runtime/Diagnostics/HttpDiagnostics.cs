@@ -71,7 +71,7 @@ namespace CurlUnity.Diagnostics
 
         internal void Record(HttpResponse response)
         {
-            var timing = ReadTiming(response.EasyHandle);
+            var timing = ReadTiming(response);
             _timings[response] = timing;
 
             if (_timings.Count > PruneThreshold)
@@ -104,22 +104,22 @@ namespace CurlUnity.Diagnostics
             }
         }
 
-        private static HttpRequestTiming ReadTiming(IntPtr easyHandle)
+        private static HttpRequestTiming ReadTiming(HttpResponse response)
         {
-            if (easyHandle == IntPtr.Zero)
+            if (response == null || response.IsDisposed)
                 return default;
 
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_NAMELOOKUP_TIME_T, out var dns);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_CONNECT_TIME_T, out var connect);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_APPCONNECT_TIME_T, out var appConnect);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_STARTTRANSFER_TIME_T, out var firstByte);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_TOTAL_TIME_T, out var total);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_REDIRECT_TIME_T, out var redirect);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_SIZE_DOWNLOAD_T, out var dlBytes);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_SIZE_UPLOAD_T, out var ulBytes);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_SPEED_DOWNLOAD_T, out var dlSpeed);
-            CurlNative.curl_unity_getinfo_long(easyHandle, CurlNative.CURLINFO_NUM_CONNECTS, out var numConnects);
-            CurlNative.curl_unity_getinfo_off_t(easyHandle, CurlNative.CURLINFO_CONN_ID, out var connId);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_NAMELOOKUP_TIME_T, out var dns);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_CONNECT_TIME_T, out var connect);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_APPCONNECT_TIME_T, out var appConnect);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_STARTTRANSFER_TIME_T, out var firstByte);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_TOTAL_TIME_T, out var total);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_REDIRECT_TIME_T, out var redirect);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_SIZE_DOWNLOAD_T, out var dlBytes);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_SIZE_UPLOAD_T, out var ulBytes);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_SPEED_DOWNLOAD_T, out var dlSpeed);
+            response.TryGetInfoLong(CurlNative.CURLINFO_NUM_CONNECTS, out var numConnects);
+            response.TryGetInfoOffT(CurlNative.CURLINFO_CONN_ID, out var connId);
 
             return new HttpRequestTiming(
                 dnsTimeUs: dns,

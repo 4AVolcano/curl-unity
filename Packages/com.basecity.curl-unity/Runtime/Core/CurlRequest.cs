@@ -1,12 +1,36 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
 {
+    /// <summary>
+    /// CurlRequest 的生命周期状态。
+    /// <para>
+    /// 合法转换：
+    /// <c>Created → Submitted</c>（<see cref="CurlMulti.Send"/> 成功后）
+    /// → <c>Completed</c>（libcurl 返回完成）或 <c>Cancelled</c>（取消）
+    /// → <c>Disposed</c>（资源释放完毕）。
+    /// </para>
+    /// <para>
+    /// <c>Created → Cancelled</c> 和 <c>Created → Disposed</c> 也合法（未提交就取消）。
+    /// 每个终态都是幂等的；重复调用 Dispose 安全无效。
+    /// </para>
+    /// </summary>
+    internal enum CurlRequestState
+    {
+        Created = 0,
+        Submitted = 1,
+        Completed = 2,
+        Cancelled = 3,
+        Disposed = 4,
+    }
+
     internal class CurlRequest : IDisposable
     {
+        internal readonly ICurlApi Api;
         internal readonly IntPtr Handle;
         internal Action<CurlResponse> OnComplete;
 
@@ -17,24 +41,43 @@ namespace CurlUnity.Core
         internal IntPtr HeaderSlist;
         internal GCHandle SelfHandle;
 
-        private bool _disposed;
+        private int _state = (int)CurlRequestState.Created;
         private bool _handleTransferred;
 
         public CurlRequest()
+            : this(CurlNativeApi.Instance)
         {
-            Handle = CurlNative.curl_easy_init();
+        }
+
+        internal CurlRequest(ICurlApi api)
+        {
+            Api = api ?? throw new ArgumentNullException(nameof(api));
+            Handle = api.EasyInit();
             if (Handle == IntPtr.Zero)
                 throw new InvalidOperationException("curl_easy_init returned null");
         }
 
+        internal CurlRequestState State => (CurlRequestState)Volatile.Read(ref _state);
+
         /// <summary>
-        /// 请求完成后调用：释放辅助资源（GCHandle、slist、buffers），
+        /// 原子地把状态从 <paramref name="from"/> 转到 <paramref name="to"/>。
+        /// 竞争时返回 false，调用方应据此决定是否放弃当前操作。
+        /// </summary>
+        internal bool TryTransitionState(CurlRequestState from, CurlRequestState to)
+        {
+            return Interlocked.CompareExchange(
+                ref _state, (int)to, (int)from) == (int)from;
+        }
+
+        /// <summary>
+        /// 请求完成后调用：标记完成、释放辅助资源（GCHandle、slist、buffers），
         /// 但不释放 easy handle（所有权已转移给 CurlResponse）。
         /// </summary>
         internal void ReleaseBuffers()
         {
-            if (_disposed) return;
-            _disposed = true;
+            // Submitted → Completed；已 Cancelled/Disposed 则不回退
+            TryTransitionState(CurlRequestState.Submitted, CurlRequestState.Completed);
+
             _handleTransferred = true;
 
             if (SelfHandle.IsAllocated)
@@ -42,7 +85,7 @@ namespace CurlUnity.Core
 
             if (HeaderSlist != IntPtr.Zero)
             {
-                CurlNative.curl_slist_free_all(HeaderSlist);
+                Api.SListFreeAll(HeaderSlist);
                 HeaderSlist = IntPtr.Zero;
             }
 
@@ -51,21 +94,27 @@ namespace CurlUnity.Core
         }
 
         /// <summary>
-        /// 完整释放所有资源，包括 easy handle。用于取消等未完成的场景。
+        /// 完整释放所有资源，包括 easy handle。用于取消等未完成的场景。幂等。
         /// </summary>
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            // 如果已经是 Disposed，不重复释放；其它任意状态都能进入 Disposed。
+            var previous = (CurlRequestState)Interlocked.Exchange(
+                ref _state, (int)CurlRequestState.Disposed);
+            if (previous == CurlRequestState.Disposed)
+                return;
 
             if (SelfHandle.IsAllocated)
                 SelfHandle.Free();
 
             if (HeaderSlist != IntPtr.Zero)
-                CurlNative.curl_slist_free_all(HeaderSlist);
+            {
+                Api.SListFreeAll(HeaderSlist);
+                HeaderSlist = IntPtr.Zero;
+            }
 
             if (!_handleTransferred && Handle != IntPtr.Zero)
-                CurlNative.curl_easy_cleanup(Handle);
+                Api.EasyCleanup(Handle);
 
             BodyBuffer.Dispose();
             HeaderBuffer?.Dispose();
