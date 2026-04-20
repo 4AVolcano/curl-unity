@@ -117,6 +117,9 @@ namespace CurlUnity.Native
         public static extern IntPtr curl_easy_strerror(int code);
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr curl_multi_strerror(int code);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr curl_version();
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
@@ -233,7 +236,18 @@ namespace CurlUnity.Native
         public static string GetVersionString()
             => Marshal.PtrToStringAnsi(curl_version()) ?? "";
 
+        /// <summary>
+        /// 把 <c>CURLcode</c>（<c>curl_easy_*</c> 系列函数的返回值）转成文本。
+        /// 用于 <c>curl_multi_*</c> 返回的 <c>CURLMcode</c> 会得到错误的字符串，
+        /// 那种情况请改用 <see cref="GetMultiErrorString"/>。
+        /// </summary>
         public static string GetErrorString(int code)
             => Marshal.PtrToStringAnsi(curl_easy_strerror(code)) ?? "";
+
+        /// <summary>
+        /// 把 <c>CURLMcode</c>（<c>curl_multi_*</c> 系列函数的返回值）转成文本。
+        /// </summary>
+        public static string GetMultiErrorString(int code)
+            => Marshal.PtrToStringAnsi(curl_multi_strerror(code)) ?? "";
     }
 }

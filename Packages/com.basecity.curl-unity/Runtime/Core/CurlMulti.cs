@@ -113,7 +113,7 @@ namespace CurlUnity.Core
             {
                 _activeRequests.Remove(request);
                 var ex = new InvalidOperationException(
-                    $"curl_multi_add_handle failed (code {rc}): {_api.GetErrorString(rc)}");
+                    $"curl_multi_add_handle failed (code {rc}): {_api.GetMultiErrorString(rc)}");
                 FailComplete(request, ex);
             }
         }
@@ -139,7 +139,7 @@ namespace CurlUnity.Core
 
             var rc = _api.MultiPerform(_multi, out _);
             if (rc != CurlNative.CURLE_OK)
-                CurlLog.Warn($"curl_multi_perform returned {rc}: {_api.GetErrorString(rc)}");
+                CurlLog.Warn($"curl_multi_perform returned {rc}: {_api.GetMultiErrorString(rc)}");
 
             while (_api.MultiInfoRead(_multi, out var easyHandle, out var curlCode) == 1)
             {
@@ -152,7 +152,7 @@ namespace CurlUnity.Core
             if (IsDisposed) return;
             var rc = _api.MultiPoll(_multi, IntPtr.Zero, 0, timeoutMs, out _);
             if (rc != CurlNative.CURLE_OK)
-                CurlLog.Warn($"curl_multi_poll returned {rc}: {_api.GetErrorString(rc)}");
+                CurlLog.Warn($"curl_multi_poll returned {rc}: {_api.GetMultiErrorString(rc)}");
         }
 
         /// <summary>线程安全，可从任意线程调用。</summary>
@@ -169,8 +169,9 @@ namespace CurlUnity.Core
         ///   <item><c>Created</c>: 尚未进 multi，直接标记 Cancelled 并通过 OnComplete
         ///   通知，然后 Dispose。</item>
         ///   <item><c>Submitted</c>: 已在 multi 中，先从 multi 移除再 Dispose；
-        ///   OnComplete 已由 <see cref="SendAsync 路径"/>上层的 CancellationToken
-        ///   回调做过 TrySetCanceled，这里只负责资源回收。</item>
+        ///   OnComplete 已由 <c>CurlHttpClient.SendAsync</c> 路径上层的
+        ///   <c>CancellationToken</c> 回调做过 <c>TrySetCanceled</c>，这里只负责
+        ///   资源回收。</item>
         ///   <item><c>Completed</c> / <c>Cancelled</c> / <c>Disposed</c>: 无操作。</item>
         /// </list>
         /// 必须在驱动线程上调用（与 Tick 同一线程）。
@@ -199,8 +200,9 @@ namespace CurlUnity.Core
                     // _multi.Dispose 时再尝试清理；如果那时仍失败，handle 就随进程退出
                     // 由 OS 回收。
                     CurlLog.Error(
-                        $"curl_multi_remove_handle on cancel returned {rc}; leaving easy handle attached " +
-                        $"to multi to avoid use-after-free. It will be reclaimed when multi is disposed.");
+                        $"curl_multi_remove_handle on cancel returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                        $"leaving easy handle attached to multi to avoid use-after-free. " +
+                        $"It will be reclaimed when multi is disposed.");
                     return;
                 }
 
@@ -238,11 +240,25 @@ namespace CurlUnity.Core
         {
             if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
 
-            // 清理所有仍在执行的请求（释放 GCHandle 和 easy handle）
+            // 清理所有仍在执行的请求（释放 GCHandle 和 easy handle）。
+            // 和 Cancel 路径同样的约束：只有 curl_multi_remove_handle 成功后，
+            // 才能安全地 curl_easy_cleanup 对应的 easy handle——否则 multi 仍
+            // 持有 handle 引用时 cleanup 会触发 UAF。失败时走"泄漏优于崩溃"：
+            // 记 error 日志，留给后面 curl_multi_cleanup 或进程退出回收。
             foreach (var request in _activeRequests)
             {
-                _api.MultiRemoveHandle(_multi, request.Handle);
-                request.Dispose();
+                var rc = _api.MultiRemoveHandle(_multi, request.Handle);
+                if (rc == CurlNative.CURLE_OK)
+                {
+                    request.Dispose();
+                }
+                else
+                {
+                    CurlLog.Error(
+                        $"CurlMulti.Dispose: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                        $"skipping easy handle cleanup for this request to avoid use-after-free. " +
+                        $"Resource will be reclaimed on process exit.");
+                }
             }
             _activeRequests.Clear();
 

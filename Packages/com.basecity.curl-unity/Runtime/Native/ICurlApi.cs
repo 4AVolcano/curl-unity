@@ -36,6 +36,10 @@ namespace CurlUnity.Native
         int MultiWakeup(IntPtr multi);
         int MultiInfoRead(IntPtr multi, out IntPtr easyHandle, out int result);
 
+        /// <summary><c>curl_easy_strerror</c> 等价物，用于 <c>CURLcode</c>（easy 系列返回值）。</summary>
         string GetErrorString(int code);
+
+        /// <summary><c>curl_multi_strerror</c> 等价物，用于 <c>CURLMcode</c>（multi 系列返回值）。</summary>
+        string GetMultiErrorString(int code);
     }
 }

@@ -279,6 +279,8 @@ namespace CurlUnity.UnitTests.TestSupport
 
         public string GetErrorString(int code) => $"fake-error-{code}";
 
+        public string GetMultiErrorString(int code) => $"fake-multi-error-{code}";
+
         public IntPtr GetFirstActiveHandle(IntPtr multi)
         {
             return _multiHandles[multi].ActiveHandles.FirstOrDefault();

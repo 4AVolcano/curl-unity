@@ -76,5 +76,7 @@ namespace CurlUnity.Native
             CurlNative.curl_unity_multi_info_read(multi, out easyHandle, out result);
 
         public string GetErrorString(int code) => CurlNative.GetErrorString(code);
+
+        public string GetMultiErrorString(int code) => CurlNative.GetMultiErrorString(code);
     }
 }
