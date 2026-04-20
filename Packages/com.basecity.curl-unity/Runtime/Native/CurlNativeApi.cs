@@ -56,6 +56,16 @@ namespace CurlUnity.Native
         public int GetInfoOffT(IntPtr handle, int info, out long value) =>
             CurlNative.curl_unity_getinfo_off_t(handle, info, out value);
 
+        public IntPtr ShareInit() => CurlNative.curl_share_init();
+
+        public int ShareCleanup(IntPtr share) => CurlNative.curl_share_cleanup(share);
+
+        public int ShareSetOptLong(IntPtr share, int option, long value) =>
+            CurlNative.curl_unity_share_setopt_long(share, option, value);
+
+        public int ShareSetOptPtr(IntPtr share, int option, IntPtr value) =>
+            CurlNative.curl_unity_share_setopt_ptr(share, option, value);
+
         public IntPtr MultiInit() => CurlNative.curl_multi_init();
 
         public int MultiCleanup(IntPtr multi) => CurlNative.curl_multi_cleanup(multi);
@@ -78,5 +88,7 @@ namespace CurlUnity.Native
         public string GetErrorString(int code) => CurlNative.GetErrorString(code);
 
         public string GetMultiErrorString(int code) => CurlNative.GetMultiErrorString(code);
+
+        public string GetShareErrorString(int code) => CurlNative.GetShareErrorString(code);
     }
 }

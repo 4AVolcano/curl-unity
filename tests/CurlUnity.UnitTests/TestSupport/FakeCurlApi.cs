@@ -20,6 +20,12 @@ namespace CurlUnity.UnitTests.TestSupport
         public int CurlGlobalInitCalls { get; private set; }
         public int CurlGlobalCleanupCalls { get; private set; }
         public int MultiCleanupCalls { get; private set; }
+        public int ShareInitCalls { get; private set; }
+        public int ShareCleanupCalls { get; private set; }
+
+        // 记录所有创建过的 share handle（便于断言隔离/共享）
+        public readonly Dictionary<IntPtr, FakeShareHandleState> ShareHandles = new();
+        private long _nextShareHandle = 30_000;
 
         public bool PollInProgress { get; private set; }
         public bool CallbackInProgress { get; private set; }
@@ -277,9 +283,39 @@ namespace CurlUnity.UnitTests.TestSupport
             return 0;
         }
 
+        public IntPtr ShareInit()
+        {
+            ShareInitCalls++;
+            var handle = new IntPtr(_nextShareHandle++);
+            ShareHandles[handle] = new FakeShareHandleState();
+            return handle;
+        }
+
+        public int ShareCleanup(IntPtr share)
+        {
+            ShareCleanupCalls++;
+            if (ShareHandles.TryGetValue(share, out var state))
+                state.IsCleanedUp = true;
+            return CurlNative.CURLSHE_OK;
+        }
+
+        public int ShareSetOptLong(IntPtr share, int option, long value)
+        {
+            ShareHandles[share].LongOptions[option] = value;
+            return CurlNative.CURLSHE_OK;
+        }
+
+        public int ShareSetOptPtr(IntPtr share, int option, IntPtr value)
+        {
+            ShareHandles[share].PointerOptions[option] = value;
+            return CurlNative.CURLSHE_OK;
+        }
+
         public string GetErrorString(int code) => $"fake-error-{code}";
 
         public string GetMultiErrorString(int code) => $"fake-multi-error-{code}";
+
+        public string GetShareErrorString(int code) => $"fake-share-error-{code}";
 
         public IntPtr GetFirstActiveHandle(IntPtr multi)
         {
@@ -327,6 +363,13 @@ namespace CurlUnity.UnitTests.TestSupport
         {
             public readonly HashSet<IntPtr> ActiveHandles = new();
             public readonly Queue<(IntPtr easyHandle, int result)> CompletedHandles = new();
+            public bool IsCleanedUp;
+        }
+
+        public sealed class FakeShareHandleState
+        {
+            public readonly Dictionary<int, long> LongOptions = new();
+            public readonly Dictionary<int, IntPtr> PointerOptions = new();
             public bool IsCleanedUp;
         }
     }

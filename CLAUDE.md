@@ -81,7 +81,7 @@ scripts\build-windows.bat --clean       :: 清理重编
 
 ### bridge 层
 
-ARM64 ABI 对 variadic 和 fixed 参数使用不同传参方式。libcurl 的 `curl_easy_setopt`/`curl_easy_getinfo`/`curl_multi_setopt` 是 variadic 函数，不能通过 P/Invoke 直接调用。`bridge/curl_unity_bridge.c` 将其包装为 fixed-argument 函数。非 variadic 函数可直接 P/Invoke 调用。
+ARM64 ABI 对 variadic 和 fixed 参数使用不同传参方式。libcurl 的 `curl_easy_setopt`/`curl_easy_getinfo`/`curl_multi_setopt`/`curl_share_setopt` 是 variadic 函数，不能通过 P/Invoke 直接调用。`bridge/curl_unity_bridge.c` 将其包装为 fixed-argument 函数。非 variadic 函数可直接 P/Invoke 调用。
 
 ## 常量定义规范
 
