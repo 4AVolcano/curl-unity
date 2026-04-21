@@ -261,6 +261,15 @@ namespace CurlUnity.Http
             CheckSetOpt("CURLOPT_HTTP_VERSION",
                 _api.SetOptLong(h, CurlNative.CURLOPT_HTTP_VERSION, (long)PreferredVersion));
 
+            // 响应自动解压: "" 让 libcurl 使用编译时所有支持的算法(本项目链接了 zlib,
+            // 所以是 gzip + deflate;brotli/zstd 编译时禁用了)。libcurl 会发
+            // Accept-Encoding header 并在收到响应时透明解压。
+            if (request.AutoDecompressResponse)
+            {
+                CheckSetOpt("CURLOPT_ACCEPT_ENCODING",
+                    _api.SetOptString(h, CurlNative.CURLOPT_ACCEPT_ENCODING, ""));
+            }
+
             // SSL 验证
             if (!VerifySSL)
             {

@@ -47,6 +47,20 @@ namespace CurlUnity.Http
         bool EnableResponseHeaders { get; set; }
 
         /// <summary>
+        /// 是否让 libcurl 自动处理响应压缩。默认 <c>true</c>。
+        /// <para>
+        /// 为 <c>true</c>:发送 <c>Accept-Encoding: gzip, deflate</c>(按编译时链接的
+        /// 压缩库), libcurl 自动解压响应, <c>HttpResponse.Body</c> 拿到的是解压后的原文。
+        /// 对 JSON/HTML/text 可降低 3-5 倍下行流量。
+        /// </para>
+        /// <para>
+        /// 为 <c>false</c>:不发 <c>Accept-Encoding</c>, 响应按 server 原样交付;
+        /// 如果 server 仍回 <c>Content-Encoding: gzip</c>, Body 是压缩字节, 需调用方自理。
+        /// </para>
+        /// </summary>
+        bool AutoDecompressResponse { get; set; }
+
+        /// <summary>
         /// 是否接入所属 <see cref="IHttpClient"/> 的共享 cookie jar。默认 false。
         /// <para>
         /// 为 <c>true</c> 时：服务端 <c>Set-Cookie</c> 写入 jar、后续请求自动回发匹配 cookie，

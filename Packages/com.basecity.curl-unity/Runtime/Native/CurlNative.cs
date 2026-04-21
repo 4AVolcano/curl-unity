@@ -47,6 +47,7 @@ namespace CurlUnity.Native
         public const int CURLOPT_POSTFIELDS = 10015;
         public const int CURLOPT_POSTFIELDSIZE = 60;
         public const int CURLOPT_USERAGENT = 10018;
+        public const int CURLOPT_ACCEPT_ENCODING = 10102;
         public const int CURLOPT_HTTP_VERSION = 84;
         public const int CURLOPT_ALTSVC = 10230;
         public const int CURLOPT_CONNECTTIMEOUT_MS = 156;

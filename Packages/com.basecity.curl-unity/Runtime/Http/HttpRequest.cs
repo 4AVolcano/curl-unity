@@ -16,6 +16,7 @@ namespace CurlUnity.Http
         public int TimeoutMs { get; set; }
         public bool EnableResponseHeaders { get; set; }
         public bool EnableCookies { get; set; }
+        public bool AutoDecompressResponse { get; set; } = true;
         public Action<byte[], int, int> OnDataReceived { get; set; }
     }
 }
