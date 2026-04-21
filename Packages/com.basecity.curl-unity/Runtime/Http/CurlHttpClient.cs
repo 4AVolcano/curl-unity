@@ -15,10 +15,11 @@ namespace CurlUnity.Http
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>代理行为：</b>本客户端默认不使用代理，并显式屏蔽 libcurl 对
+    /// <b>代理行为：</b>默认不使用代理，且显式屏蔽 libcurl 对
     /// <c>HTTPS_PROXY</c> / <c>HTTP_PROXY</c> 等环境变量的自动读取，避免
-    /// 开发/宿主机上的代理泄漏到业务网络配置，且 HTTP/3 本身无法经由 HTTP 代理。
-    /// 显式代理支持作为独立特性后续提供（见项目 Roadmap 的 Proxy 任务）。
+    /// 开发/宿主机上的代理泄漏到业务网络。需要走代理时调用
+    /// <see cref="SetProxy"/> 显式激活；<see cref="ClearProxy"/> 恢复默认行为。
+    /// 注意 HTTP/3 无法经 HTTP 代理隧道化，启用代理后 libcurl 会回退到 HTTP/2。
     /// </para>
     /// <para>
     /// <b>Cookie 行为：</b><see cref="IHttpRequest.EnableCookies"/> 为 <c>true</c>
@@ -34,6 +35,7 @@ namespace CurlUnity.Http
         private readonly ConcurrentDictionary<IntPtr, CancellationTokenRegistration> _cancellations = new();
         private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, byte> _pendingTasks = new();
         private CurlCookieJar _cookieJar;  // lazy：首次用到 EnableCookies 时初始化
+        private volatile HttpProxy _proxy; // null = 不走代理（默认）；引用赋值天然原子
         private int _disposedFlag;
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
@@ -61,6 +63,18 @@ namespace CurlUnity.Http
                 Diagnostics = new HttpDiagnostics();
             _worker = new CurlBackgroundWorker(_api);
             _worker.Start();
+        }
+
+        public void SetProxy(HttpProxy proxy)
+        {
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
+            _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
+        }
+
+        public void ClearProxy()
+        {
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
+            _proxy = null;
         }
 
         public Task<IHttpResponse> SendAsync(IHttpRequest request, CancellationToken ct = default)
@@ -208,10 +222,27 @@ namespace CurlUnity.Http
             // URL 是请求成立的前提；失败必须往外抛，不能偷偷走"URL 为空的 request"。
             CheckSetOpt("CURLOPT_URL", _api.SetOptString(h, CurlNative.CURLOPT_URL, request.Url));
 
-            // 禁用 libcurl 默认读取 HTTPS_PROXY/HTTP_PROXY 环境变量的行为，避免
-            // 进程环境泄漏到网络配置（且 HTTP/3 本身无法经由 HTTP 代理）。
-            // 显式 Proxy 支持后续作为独立特性开放。
-            CheckSetOpt("CURLOPT_PROXY", _api.SetOptString(h, CurlNative.CURLOPT_PROXY, ""));
+            // Proxy：未设置时显式置空禁用 libcurl 读 HTTPS_PROXY/HTTP_PROXY 环境变量
+            // （避免进程环境泄漏到网络配置）;设置后由 URL scheme 自动决定代理类型。
+            // HTTP/3 无法经由 HTTP 代理,libcurl 会自动回退到 HTTP/2 over TCP。
+            var proxy = _proxy; // 本次 build 内读一次,SetProxy/ClearProxy 只影响后续请求
+            if (proxy == null)
+            {
+                CheckSetOpt("CURLOPT_PROXY", _api.SetOptString(h, CurlNative.CURLOPT_PROXY, ""));
+            }
+            else
+            {
+                CheckSetOpt("CURLOPT_PROXY", _api.SetOptString(h, CurlNative.CURLOPT_PROXY, proxy.Url));
+                // 同时屏蔽 NO_PROXY 环境变量, 否则 target 是 loopback/内网时会被静默绕过代理
+                CheckSetOpt("CURLOPT_NOPROXY", _api.SetOptString(h, CurlNative.CURLOPT_NOPROXY, ""));
+                if (proxy.Credentials != null)
+                {
+                    var user = proxy.Credentials.UserName ?? string.Empty;
+                    var pwd = proxy.Credentials.Password ?? string.Empty;
+                    CheckSetOpt("CURLOPT_PROXYUSERPWD",
+                        _api.SetOptString(h, CurlNative.CURLOPT_PROXYUSERPWD, $"{user}:{pwd}"));
+                }
+            }
 
             // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
             CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
