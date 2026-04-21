@@ -51,7 +51,14 @@ namespace CurlUnity.IntegrationTests.Tests
 
             _client.SetProxy(new HttpProxy(ProxyUrl, creds));
 
-            using var resp = await _client.GetAsync(ProxyTestUrl);
+            // 走外部网络, 给合理超时避免代理/网络异常时测试长时间挂起
+            var req = new HttpRequest
+            {
+                Url = ProxyTestUrl,
+                ConnectTimeoutMs = 5000,
+                TimeoutMs = 15000,
+            };
+            using var resp = await _client.SendAsync(req);
 
             Assert.True(resp.HasResponse,
                 $"expected response via proxy {ProxyUrl}, got error {resp.ErrorCode}: {resp.ErrorMessage}");
