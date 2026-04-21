@@ -166,6 +166,37 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         [Fact]
+        public async Task BodyStream_AndEmptyBody_BothSet_Throws()
+        {
+            // 零长度 byte[] 也与 BodyStream 互斥(避免 Length>0 判断误放过)
+            using var src = new MemoryStream(new byte[] { 1, 2, 3 });
+            var req = new HttpRequest
+            {
+                Method = HttpMethod.Post,
+                Url = $"{_server.HttpUrl}/echo-bytes",
+                Body = Array.Empty<byte>(),
+                BodyStream = src,
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => _client.SendAsync(req));
+        }
+
+        [Fact]
+        public async Task BodyStream_NegativeLength_Throws()
+        {
+            using var src = new MemoryStream(new byte[] { 1, 2, 3 });
+            var req = new HttpRequest
+            {
+                Method = HttpMethod.Post,
+                Url = $"{_server.HttpUrl}/echo-bytes",
+                BodyStream = src,
+                BodyLength = -1,
+            };
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => _client.SendAsync(req));
+        }
+
+        [Fact]
         public async Task BodyStream_WithGetMethod_Throws()
         {
             using var src = new MemoryStream(new byte[] { 1, 2, 3 });

@@ -447,7 +447,10 @@ namespace CurlUnity.Core
             // 返回 0 = EOF, CURL_READFUNC_ABORT = 中止, 正数 = 实际写入字节数
             var capacity = size.ToUInt64() * nmemb.ToUInt64();
             if (capacity == 0) return UIntPtr.Zero;
-            if (capacity > int.MaxValue) capacity = int.MaxValue;
+            // 防御: 超大请求拒绝而不是分配 2GB。libcurl 内部 buffer 一般 16KB,
+            // 超过 int.MaxValue 属于异常输入,直接 ABORT。
+            if (capacity > int.MaxValue)
+                return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
             var want = (int)capacity;
 
             CurlRequest request;
@@ -458,9 +461,10 @@ namespace CurlUnity.Core
             if (request.State == CurlRequestState.Cancelled)
                 return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
 
+            // ArrayPool 复用中间缓冲,避免大文件上传时频繁 GC
+            var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(want);
             try
             {
-                var buf = new byte[want];
                 int read = request.UploadStream.Read(buf, 0, want);
                 if (read <= 0) return UIntPtr.Zero; // EOF
                 Marshal.Copy(buf, 0, ptr, read);
@@ -473,6 +477,10 @@ namespace CurlUnity.Core
                 System.Threading.Interlocked.CompareExchange(
                     ref request.UploadError, ex, null);
                 return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buf);
             }
         }
     }

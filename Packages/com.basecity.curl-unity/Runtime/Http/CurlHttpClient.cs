@@ -272,13 +272,16 @@ namespace CurlUnity.Http
 
             // Body / BodyStream 互斥 + 语义校验
             bool hasStream = request.BodyStream != null;
-            bool hasBody = request.Body != null && request.Body.Length > 0;
+            bool hasBody = request.Body != null;  // 互斥判断不依赖长度, 空 byte[] 也禁止与 stream 共存
             if (hasStream && hasBody)
                 throw new InvalidOperationException(
                     "HttpRequest.Body 与 BodyStream 互斥, 同时设置无法确定上传源");
             if (hasStream && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
                 throw new InvalidOperationException(
                     $"HTTP {request.Method} 不允许带 body; BodyStream 需配合 POST/PUT/PATCH 等方法");
+            if (hasStream && request.BodyLength.HasValue && request.BodyLength.Value < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.BodyLength), "BodyLength 不能为负数");
 
             // Method / Body
             if (hasStream)
@@ -318,8 +321,9 @@ namespace CurlUnity.Http
                         break;
                 }
 
-                // byte[] Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容
-                if (hasBody)
+                // byte[] Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容。
+                // 空 byte[] (Length == 0) 走默认, 不需要设 POSTFIELDS。
+                if (hasBody && request.Body.Length > 0)
                 {
                     CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
                         _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length));
