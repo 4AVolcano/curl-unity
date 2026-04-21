@@ -165,6 +165,35 @@ namespace CurlUnity.IntegrationTests.TestServer
 
             app.MapGet("/protocol", (HttpRequest req) => Results.Text(req.Protocol));
 
+            // gzip 压缩响应:仅在 request Accept-Encoding 含 gzip 时返回压缩 body,
+            // 并设 Content-Encoding: gzip;否则返回明文。用来验证客户端的
+            // AutoDecompressResponse 行为 (开启时 → 客户端看到解压原文)。
+            app.MapGet("/gzip-text/{size:int}", async (int size, HttpContext ctx) =>
+            {
+                var text = new string('A', size);
+                var plain = System.Text.Encoding.UTF8.GetBytes(text);
+
+                var acceptEnc = (string)ctx.Request.Headers["Accept-Encoding"];
+                if (acceptEnc != null && acceptEnc.Contains("gzip", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 先 gzip 到内存,再一次性写,确保 Kestrel 根据实际压缩长度写 Content-Length
+                    using var gzBuf = new MemoryStream();
+                    using (var gz = new System.IO.Compression.GZipStream(gzBuf, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+                        gz.Write(plain, 0, plain.Length);
+                    var compressed = gzBuf.ToArray();
+                    ctx.Response.Headers["Content-Encoding"] = "gzip";
+                    ctx.Response.ContentType = "text/plain";
+                    ctx.Response.ContentLength = compressed.Length;
+                    await ctx.Response.Body.WriteAsync(compressed, 0, compressed.Length);
+                }
+                else
+                {
+                    ctx.Response.ContentType = "text/plain";
+                    ctx.Response.ContentLength = plain.Length;
+                    await ctx.Response.Body.WriteAsync(plain, 0, plain.Length);
+                }
+            });
+
             // multipart/form-data echo: 解析表单和文件,以可验证的文本格式返回
             //   ct=<request-content-type>
             //   field:<name>=<value>
