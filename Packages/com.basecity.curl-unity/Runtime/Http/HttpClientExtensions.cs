@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -52,6 +53,21 @@ namespace CurlUnity.Http
             CancellationToken ct = default)
         {
             var req = new HttpRequest { Method = HttpMethod.Delete, Url = url };
+            return client.SendAsync(req, ct);
+        }
+
+        /// <summary>POST multipart/form-data 表单。</summary>
+        public static Task<IHttpResponse> PostMultipartAsync(this IHttpClient client, string url,
+            MultipartFormData form, CancellationToken ct = default)
+        {
+            if (form == null) throw new ArgumentNullException(nameof(form));
+            var req = new HttpRequest
+            {
+                Method = HttpMethod.Post,
+                Url = url,
+                Body = form.Build(),
+                Headers = new[] { new KeyValuePair<string, string>("Content-Type", form.ContentType) }
+            };
             return client.SendAsync(req, ct);
         }
     }

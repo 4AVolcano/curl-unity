@@ -164,6 +164,36 @@ namespace CurlUnity.IntegrationTests.TestServer
             app.MapGet("/json", () => Results.Json(new { message = "ok", number = 42 }));
 
             app.MapGet("/protocol", (HttpRequest req) => Results.Text(req.Protocol));
+
+            // multipart/form-data echo: 解析表单和文件,以可验证的文本格式返回
+            //   ct=<request-content-type>
+            //   field:<name>=<value>
+            //   file:<name>;filename=<n>;ct=<mime>;len=<size>;sha256=<hex>
+            app.MapPost("/multipart-echo", async (HttpRequest req) =>
+            {
+                if (!req.HasFormContentType)
+                    return Results.Text($"not-form ct={req.ContentType}", "text/plain", statusCode: 400);
+
+                var form = await req.ReadFormAsync();
+                var sb = new System.Text.StringBuilder();
+                sb.Append("ct=").Append(req.ContentType).Append('\n');
+                foreach (var kv in form.OrderBy(k => k.Key))
+                    sb.Append("field:").Append(kv.Key).Append('=').Append(kv.Value.ToString()).Append('\n');
+                foreach (var f in form.Files.OrderBy(f => f.Name))
+                {
+                    using var ms = new MemoryStream();
+                    await f.CopyToAsync(ms);
+                    var bytes = ms.ToArray();
+                    var sha = System.Security.Cryptography.SHA256.HashData(bytes);
+                    sb.Append("file:").Append(f.Name)
+                      .Append(";filename=").Append(f.FileName)
+                      .Append(";ct=").Append(f.ContentType)
+                      .Append(";len=").Append(bytes.Length)
+                      .Append(";sha256=").Append(Convert.ToHexString(sha).ToLowerInvariant())
+                      .Append('\n');
+                }
+                return Results.Text(sb.ToString(), "text/plain");
+            });
         }
     }
 }
