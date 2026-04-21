@@ -253,3 +253,110 @@ jobs:
         with:
           name: windows-${{ matrix.arch }}
           path: output/Windows/${{ matrix.output_arch }}/libcurl_unity.dll
+
+  # ============================================================
+  # Publish UPM Package (只在 tag 触发时发布到 upm 分支)
+  # ============================================================
+  publish-upm:
+    name: Publish UPM Package
+    needs: [build-macos, build-ios, build-android, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. v0.2.0
+          VERSION="${TAG#v}"                # e.g. 0.2.0
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "upm_tag=upm/$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+
+      - name: Assemble Plugins
+        run: |
+          set -euo pipefail
+          PKG=Packages/com.basecity.curl-unity
+          PLUGINS="$PKG/Runtime/Plugins"
+
+          # macOS — lipo arm64 + x86_64 -> universal
+          mkdir -p "$PLUGINS/macOS"
+          lipo -create \
+            _artifacts/macos-arm64/libcurl_unity.dylib \
+            _artifacts/macos-x86_64/libcurl_unity.dylib \
+            -output "$PLUGINS/macOS/libcurl_unity.dylib"
+          lipo -info "$PLUGINS/macOS/libcurl_unity.dylib"
+
+          # iOS
+          mkdir -p "$PLUGINS/iOS"
+          cp _artifacts/ios-arm64/libcurl_unity.a "$PLUGINS/iOS/libcurl_unity.a"
+
+          # Android
+          mkdir -p "$PLUGINS/Android/arm64-v8a" "$PLUGINS/Android/armeabi-v7a" "$PLUGINS/Android/x86_64"
+          cp _artifacts/android-arm64/libcurl_unity.so  "$PLUGINS/Android/arm64-v8a/libcurl_unity.so"
+          cp _artifacts/android-armv7/libcurl_unity.so  "$PLUGINS/Android/armeabi-v7a/libcurl_unity.so"
+          cp _artifacts/android-x86_64/libcurl_unity.so "$PLUGINS/Android/x86_64/libcurl_unity.so"
+
+          # Windows
+          mkdir -p "$PLUGINS/Windows/x86_64" "$PLUGINS/Windows/x86"
+          cp _artifacts/windows-x64/libcurl_unity.dll "$PLUGINS/Windows/x86_64/libcurl_unity.dll"
+          cp _artifacts/windows-x86/libcurl_unity.dll "$PLUGINS/Windows/x86/libcurl_unity.dll"
+
+          echo "--- Final Plugins layout ---"
+          find "$PLUGINS" -type f ! -name '*.meta' | sort
+
+      - name: Update package.json version
+        run: |
+          set -euo pipefail
+          PKG=Packages/com.basecity.curl-unity
+          python3 - <<'PY'
+          import json, os, pathlib
+          version = os.environ["VERSION"]
+          p = pathlib.Path("Packages/com.basecity.curl-unity/package.json")
+          data = json.loads(p.read_text())
+          data["version"] = version
+          p.write_text(json.dumps(data, indent=2) + "\n")
+          print(p.read_text())
+          PY
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+
+      - name: Publish to upm branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          UPM_TAG: ${{ steps.ver.outputs.upm_tag }}
+        run: |
+          set -euo pipefail
+          PKG=Packages/com.basecity.curl-unity
+
+          STAGE="$(mktemp -d)"
+          # 平铺 package 内容到根；保留 .meta;排除 .git
+          rsync -a --exclude='.git' "$PKG/" "$STAGE/"
+
+          cd "$STAGE"
+          git init -q -b upm
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Release $TAG"
+
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote add origin "$REMOTE"
+
+          # 孤儿分支,force push 覆盖
+          git push -f origin upm
+
+          # 为 upm 分支的 commit 打 tag(命名加 upm/ 前缀,避免与 master 的 v* tag 冲突)
+          git tag -a "$UPM_TAG" -m "UPM release $TAG"
+          git push origin "$UPM_TAG"
+
+          echo "Published $UPM_TAG to upm branch"

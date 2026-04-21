@@ -14,6 +14,27 @@ libcurl 的 Unity3D 原生封装，通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUI
 - **async/await** — `Task<IHttpResponse>` 接口 + `CancellationToken` 支持
 - **诊断统计** — DNS/TLS/TTFB 逐请求 timing，连接复用率
 
+## 安装
+
+作为 Unity Package Manager 的 git package 引用。编辑工程的 `Packages/manifest.json`：
+
+```json
+{
+  "dependencies": {
+    "com.basecity.curl-unity": "https://github.com/rugbbyli/curl-unity.git#upm"
+  }
+}
+```
+
+引用形式：
+
+| 引用 | 说明 |
+|------|------|
+| `...curl-unity.git#upm` | 跟最新正式版（upm 分支 HEAD） |
+| `...curl-unity.git#upm/v0.2.0` | 锁定到具体版本 |
+
+`upm` 分支由 CI 在打 `v*` tag 时自动发布，扁平到根目录，包含 `Runtime/`、`Editor/`、`package.json` 和全平台预编译二进制，**不含 `deps/` 源码**，体积小。
+
 ## 支持平台
 
 | 平台 | 架构 | 产物 | 最低版本 |
@@ -105,9 +126,9 @@ GitHub Actions 提供全平台自动构建：
 
 | 事件 | Workflow | 说明 |
 |------|----------|------|
-| push tag `v*` | `build.yml` | 全平台构建 + 验证 + 上传 artifacts |
+| push tag `v*` | `build.yml` | 全平台构建 + 验证 + 上传 artifacts + 发布到 `upm` 分支（打 `upm/v*` tag） |
 | push / PR to master | `test.yml` | 运行测试 |
-| 手动触发 | `build.yml` | workflow_dispatch |
+| 手动触发 | `build.yml` | workflow_dispatch（只构建，不发布） |
 
 ## 开发计划
 
@@ -139,7 +160,7 @@ C# 封装层 + Unity 集成，开发中。
 - [ ] Multipart / Form-Data 上传
 - [ ] 流式上传 (READFUNCTION)
 - [ ] 完善单元测试 & CI 测试流程
-- [ ] 发布为 UPM 包
+- [x] 发布为 UPM 包（CI 自动发布到 `upm` 分支）
 
 ## 许可证
 
