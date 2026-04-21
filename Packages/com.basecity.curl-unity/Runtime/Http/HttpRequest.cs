@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace CurlUnity.Http
 {
@@ -9,6 +10,8 @@ namespace CurlUnity.Http
         public string Url { get; set; }
         public IEnumerable<KeyValuePair<string, string>> Headers { get; set; }
         public byte[] Body { get; set; }
+        public Stream BodyStream { get; set; }
+        public long? BodyLength { get; set; }
         public int ConnectTimeoutMs { get; set; }
         public int TimeoutMs { get; set; }
         public bool EnableResponseHeaders { get; set; }

@@ -90,6 +90,15 @@ namespace CurlUnity.Core
             if (!TrySetOpt("CURLOPT_WRITEDATA",
                     _api.SetOptWriteData(request.Handle, ptr), request)) return;
 
+            // read callback: 仅在流式上传(UploadStream != null)时设置
+            if (request.UploadStream != null)
+            {
+                if (!TrySetOpt("CURLOPT_READFUNCTION",
+                        _api.SetOptReadFunction(request.Handle, OnReadData), request)) return;
+                if (!TrySetOpt("CURLOPT_READDATA",
+                        _api.SetOptReadData(request.Handle, ptr), request)) return;
+            }
+
             // header callback: 仅在 CaptureHeaders 时设置
             if (request.CaptureHeaders)
             {
@@ -427,6 +436,52 @@ namespace CurlUnity.Core
                 && buffer[2] == (byte)'T'
                 && buffer[3] == (byte)'P'
                 && buffer[4] == (byte)'/';
+        }
+
+#if UNITY_5_3_OR_NEWER
+        [MonoPInvokeCallback(typeof(CurlNative.WriteCallback))]
+#endif
+        private static UIntPtr OnReadData(IntPtr ptr, UIntPtr size, UIntPtr nmemb, IntPtr userdata)
+        {
+            // libcurl 向 ptr 指向的 buffer 索要最多 size*nmemb 字节;
+            // 返回 0 = EOF, CURL_READFUNC_ABORT = 中止, 正数 = 实际写入字节数
+            var capacity = size.ToUInt64() * nmemb.ToUInt64();
+            if (capacity == 0) return UIntPtr.Zero;
+            // 防御: 超大请求拒绝而不是分配 2GB。libcurl 内部 buffer 一般 16KB,
+            // 超过 int.MaxValue 属于异常输入,直接 ABORT。
+            if (capacity > int.MaxValue)
+                return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
+            var want = (int)capacity;
+
+            CurlRequest request;
+            try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
+            catch { return (UIntPtr)CurlNative.CURL_READFUNC_ABORT; }
+
+            // 取消竞态:已 Cancelled 直接中止,避免继续读 stream(stream 可能已被 client Dispose)
+            if (request.State == CurlRequestState.Cancelled)
+                return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
+
+            // ArrayPool 复用中间缓冲,避免大文件上传时频繁 GC
+            var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(want);
+            try
+            {
+                int read = request.UploadStream.Read(buf, 0, want);
+                if (read <= 0) return UIntPtr.Zero; // EOF
+                Marshal.Copy(buf, 0, ptr, read);
+                return (UIntPtr)read;
+            }
+            catch (Exception ex)
+            {
+                // Stream.Read 异常: 记录到 request,OnComplete 时由上层外抛。
+                // 同一请求的 UploadError 只保留第一个(后续回调不应再被调用,但做防御)
+                System.Threading.Interlocked.CompareExchange(
+                    ref request.UploadError, ex, null);
+                return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buf);
+            }
         }
     }
 }

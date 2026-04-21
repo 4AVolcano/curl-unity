@@ -41,6 +41,12 @@ namespace CurlUnity.Core
         internal IntPtr HeaderSlist;
         internal GCHandle SelfHandle;
 
+        // 流式上传: UploadStream 非 null 时 libcurl 通过 READFUNCTION 拉数据;
+        // 回调里 Stream.Read 抛异常会被记到 UploadError,请求完成后上层据此决定是否外抛。
+        // Stream 生命周期由调用方负责(不 Dispose)。
+        internal Stream UploadStream;
+        internal Exception UploadError;
+
         private int _state = (int)CurlRequestState.Created;
         private bool _handleTransferred;
 

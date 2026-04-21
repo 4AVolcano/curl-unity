@@ -21,6 +21,8 @@ namespace CurlUnity.Native
         int SetOptWriteData(IntPtr handle, IntPtr userdata);
         int SetOptHeaderFunction(IntPtr handle, CurlNative.WriteCallback callback);
         int SetOptHeaderData(IntPtr handle, IntPtr userdata);
+        int SetOptReadFunction(IntPtr handle, CurlNative.WriteCallback callback);
+        int SetOptReadData(IntPtr handle, IntPtr userdata);
 
         int GetInfoLong(IntPtr handle, int info, out long value);
         int GetInfoString(IntPtr handle, int info, out IntPtr value);

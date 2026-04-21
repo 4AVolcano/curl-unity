@@ -73,6 +73,17 @@ BRIDGE_API int curl_unity_setopt_header_data(CURL *handle, void *userdata)
     return (int)curl_easy_setopt(handle, CURLOPT_HEADERDATA, userdata);
 }
 
+/* READFUNCTION 与 WRITEFUNCTION 签名一致,复用 curl_unity_write_cb 类型 */
+BRIDGE_API int curl_unity_setopt_read_function(CURL *handle, curl_unity_write_cb callback)
+{
+    return (int)curl_easy_setopt(handle, CURLOPT_READFUNCTION, callback);
+}
+
+BRIDGE_API int curl_unity_setopt_read_data(CURL *handle, void *userdata)
+{
+    return (int)curl_easy_setopt(handle, CURLOPT_READDATA, userdata);
+}
+
 /* ================================================================
  * curl_easy_getinfo wrappers
  * ================================================================ */

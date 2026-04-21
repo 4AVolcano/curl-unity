@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace CurlUnity.Http
 {
@@ -9,6 +10,32 @@ namespace CurlUnity.Http
         string Url { get; set; }
         IEnumerable<KeyValuePair<string, string>> Headers { get; set; }
         byte[] Body { get; set; }
+
+        /// <summary>
+        /// 流式请求体。非 <c>null</c> 时以流式上传,request 期间 libcurl 按需从该 Stream 读数据;
+        /// 与 <see cref="Body"/> 互斥(同时设置会 throw);仅支持 POST/PUT/PATCH 等带 body 的方法。
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Stream 生命周期归调用方,本库不会 Dispose;请求发出到完成期间 Stream 必须可读且不关闭。
+        /// </para>
+        /// <para>
+        /// <b>不支持 rewind</b>:若 server 返回 3xx 重定向或 HTTP 认证挑战导致 libcurl 需要重发 body,
+        /// 请求会失败(未注册 <c>CURLOPT_SEEKFUNCTION</c>)。上传场景此类情况罕见。
+        /// </para>
+        /// </remarks>
+        Stream BodyStream { get; set; }
+
+        /// <summary>
+        /// <see cref="BodyStream"/> 的总长度。
+        /// <list type="bullet">
+        ///   <item>非 <c>null</c>: 设置 <c>Content-Length</c> header,libcurl 按 fixed-length 上传</item>
+        ///   <item><c>null</c>: 长度未知,libcurl 使用 <c>Transfer-Encoding: chunked</c></item>
+        /// </list>
+        /// 对 <c>MemoryStream</c> / <c>FileStream</c> 这类可 seek 的 Stream,传
+        /// <c>stream.Length - stream.Position</c> 是常见做法。
+        /// </summary>
+        long? BodyLength { get; set; }
 
         /// <summary>TCP 建连超时（毫秒），0 = 不限</summary>
         int ConnectTimeoutMs { get; set; }

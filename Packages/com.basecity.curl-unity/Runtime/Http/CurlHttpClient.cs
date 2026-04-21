@@ -141,6 +141,16 @@ namespace CurlUnity.Http
                     }
 
                     var response = new HttpResponse(_api, curlResp);
+
+                    // 流式上传:READFUNCTION 里 Stream.Read 抛异常会被记到 UploadError;
+                    // 这里检测到就放弃 response(释放 handle),把原异常透传给调用方。
+                    if (curlReq.UploadError != null)
+                    {
+                        response.Dispose();
+                        tcs.TrySetException(curlReq.UploadError);
+                        return;
+                    }
+
                     Diagnostics?.Record(response);
 
                     if (!tcs.TrySetResult(response))
@@ -260,39 +270,74 @@ namespace CurlUnity.Http
                     _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYHOST, 0));
             }
 
-            // Method
-            switch (request.Method)
-            {
-                case HttpMethod.Get:
-                    break; // GET 是默认
-                case HttpMethod.Post:
-                    CheckSetOpt("CURLOPT_POST", _api.SetOptLong(h, CurlNative.CURLOPT_POST, 1));
-                    break;
-                case HttpMethod.Head:
-                    CheckSetOpt("CURLOPT_NOBODY", _api.SetOptLong(h, CurlNative.CURLOPT_NOBODY, 1));
-                    break;
-                default:
-                    CheckSetOpt("CURLOPT_CUSTOMREQUEST",
-                        _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
-                            request.Method.ToString().ToUpperInvariant()));
-                    break;
-            }
+            // Body / BodyStream 互斥 + 语义校验
+            bool hasStream = request.BodyStream != null;
+            bool hasBody = request.Body != null;  // 互斥判断不依赖长度, 空 byte[] 也禁止与 stream 共存
+            if (hasStream && hasBody)
+                throw new InvalidOperationException(
+                    "HttpRequest.Body 与 BodyStream 互斥, 同时设置无法确定上传源");
+            if (hasStream && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
+                throw new InvalidOperationException(
+                    $"HTTP {request.Method} 不允许带 body; BodyStream 需配合 POST/PUT/PATCH 等方法");
+            if (hasStream && request.BodyLength.HasValue && request.BodyLength.Value < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.BodyLength), "BodyLength 不能为负数");
 
-            // Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容
-            if (request.Body != null && request.Body.Length > 0)
+            // Method / Body
+            if (hasStream)
             {
-                CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
-                    _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length));
-                var pin = System.Runtime.InteropServices.GCHandle.Alloc(request.Body,
-                    System.Runtime.InteropServices.GCHandleType.Pinned);
-                try
+                // 流式:统一用 UPLOAD=1 + CUSTOMREQUEST 指定方法;UPLOAD 让 libcurl 调 READFUNCTION
+                // 拉取 body。与 CURLOPT_POST=1 互斥,但 CUSTOMREQUEST 可覆盖成 POST。
+                CheckSetOpt("CURLOPT_UPLOAD", _api.SetOptLong(h, CurlNative.CURLOPT_UPLOAD, 1));
+                CheckSetOpt("CURLOPT_CUSTOMREQUEST",
+                    _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
+                        request.Method.ToString().ToUpperInvariant()));
+                if (request.BodyLength.HasValue)
                 {
-                    CheckSetOpt("CURLOPT_COPYPOSTFIELDS",
-                        _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject()));
+                    // 已知长度: 写 Content-Length header, 按 fixed-length 上传
+                    CheckSetOpt("CURLOPT_INFILESIZE_LARGE",
+                        _api.SetOptOffT(h, CurlNative.CURLOPT_INFILESIZE_LARGE, request.BodyLength.Value));
                 }
-                finally
+                // 未设 INFILESIZE → libcurl 默认走 Transfer-Encoding: chunked
+                curlReq.UploadStream = request.BodyStream;
+                // READFUNCTION 的注册由 CurlMulti.Send 根据 UploadStream != null 统一处理
+            }
+            else
+            {
+                switch (request.Method)
                 {
-                    pin.Free(); // curl 已复制数据，可以立即释放 pin
+                    case HttpMethod.Get:
+                        break; // GET 是默认
+                    case HttpMethod.Post:
+                        CheckSetOpt("CURLOPT_POST", _api.SetOptLong(h, CurlNative.CURLOPT_POST, 1));
+                        break;
+                    case HttpMethod.Head:
+                        CheckSetOpt("CURLOPT_NOBODY", _api.SetOptLong(h, CurlNative.CURLOPT_NOBODY, 1));
+                        break;
+                    default:
+                        CheckSetOpt("CURLOPT_CUSTOMREQUEST",
+                            _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
+                                request.Method.ToString().ToUpperInvariant()));
+                        break;
+                }
+
+                // byte[] Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容。
+                // 空 byte[] (Length == 0) 走默认, 不需要设 POSTFIELDS。
+                if (hasBody && request.Body.Length > 0)
+                {
+                    CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
+                        _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length));
+                    var pin = System.Runtime.InteropServices.GCHandle.Alloc(request.Body,
+                        System.Runtime.InteropServices.GCHandleType.Pinned);
+                    try
+                    {
+                        CheckSetOpt("CURLOPT_COPYPOSTFIELDS",
+                            _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject()));
+                    }
+                    finally
+                    {
+                        pin.Free(); // curl 已复制数据，可以立即释放 pin
+                    }
                 }
             }
 

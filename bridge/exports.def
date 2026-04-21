@@ -42,6 +42,8 @@ EXPORTS
     curl_unity_setopt_write_data
     curl_unity_setopt_header_function
     curl_unity_setopt_header_data
+    curl_unity_setopt_read_function
+    curl_unity_setopt_read_data
     curl_unity_getinfo_long
     curl_unity_getinfo_string
     curl_unity_getinfo_double

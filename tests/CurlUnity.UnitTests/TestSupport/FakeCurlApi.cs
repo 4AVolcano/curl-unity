@@ -137,6 +137,18 @@ namespace CurlUnity.UnitTests.TestSupport
             return CurlNative.CURLE_OK;
         }
 
+        public int SetOptReadFunction(IntPtr handle, CurlNative.WriteCallback callback)
+        {
+            _easyHandles[handle].ReadCallback = callback;
+            return CurlNative.CURLE_OK;
+        }
+
+        public int SetOptReadData(IntPtr handle, IntPtr userdata)
+        {
+            _easyHandles[handle].ReadData = userdata;
+            return CurlNative.CURLE_OK;
+        }
+
         public int GetInfoLong(IntPtr handle, int info, out long value)
         {
             if (info == CurlNative.CURLINFO_RESPONSE_CODE)
@@ -355,6 +367,8 @@ namespace CurlUnity.UnitTests.TestSupport
             public IntPtr WriteData;
             public CurlNative.WriteCallback HeaderCallback;
             public IntPtr HeaderData;
+            public CurlNative.WriteCallback ReadCallback;
+            public IntPtr ReadData;
             public long ResponseCode;
             public bool IsCleanedUp;
         }

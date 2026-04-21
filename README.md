@@ -158,7 +158,7 @@ C# 封装层 + Unity 集成，开发中。
 - [x] Cookie 跨请求共享
 - [x] Proxy 支持
 - [x] Multipart / Form-Data 上传
-- [ ] 流式上传 (READFUNCTION)
+- [x] 流式上传 (READFUNCTION)
 - [ ] 完善单元测试 & CI 测试流程
 - [x] 发布为 UPM 包（CI 自动发布到 `upm` 分支）
 

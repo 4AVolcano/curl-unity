@@ -44,6 +44,12 @@ namespace CurlUnity.Native
         public int SetOptHeaderData(IntPtr handle, IntPtr userdata) =>
             CurlNative.curl_unity_setopt_header_data(handle, userdata);
 
+        public int SetOptReadFunction(IntPtr handle, CurlNative.WriteCallback callback) =>
+            CurlNative.curl_unity_setopt_read_function(handle, callback);
+
+        public int SetOptReadData(IntPtr handle, IntPtr userdata) =>
+            CurlNative.curl_unity_setopt_read_data(handle, userdata);
+
         public int GetInfoLong(IntPtr handle, int info, out long value) =>
             CurlNative.curl_unity_getinfo_long(handle, info, out value);
 

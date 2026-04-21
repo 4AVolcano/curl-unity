@@ -35,6 +35,8 @@ namespace CurlUnity.Native
         public const int CURLOPT_WRITEDATA = 10001;
         public const int CURLOPT_HEADERFUNCTION = 20079;
         public const int CURLOPT_HEADERDATA = 10029;
+        public const int CURLOPT_READFUNCTION = 20012;
+        public const int CURLOPT_READDATA = 10009;
         public const int CURLOPT_FOLLOWLOCATION = 52;
         public const int CURLOPT_TIMEOUT = 13;
         public const int CURLOPT_CAINFO = 10065;
@@ -75,6 +77,11 @@ namespace CurlUnity.Native
         public const int CURLOPT_POST = 47;
         public const int CURLOPT_NOBODY = 44;
         public const int CURLOPT_NOSIGNAL = 99;
+        public const int CURLOPT_UPLOAD = 46;
+        public const int CURLOPT_INFILESIZE_LARGE = 30115;
+
+        // READFUNCTION sentinel return values
+        public const long CURL_READFUNC_ABORT = 0x10000000;
         public const int CURLOPT_SSL_OPTIONS = 216;
         public const long CURLSSLOPT_NATIVE_CA = 1 << 4;  // Use OS native CA store (Windows CryptoAPI)
 
@@ -203,6 +210,12 @@ namespace CurlUnity.Native
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern int curl_unity_setopt_header_data(IntPtr handle, IntPtr userdata);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_unity_setopt_read_function(IntPtr handle, WriteCallback callback);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_unity_setopt_read_data(IntPtr handle, IntPtr userdata);
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern int curl_unity_getinfo_long(IntPtr handle, int info, out long value);
