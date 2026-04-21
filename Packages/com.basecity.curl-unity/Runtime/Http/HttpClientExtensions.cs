@@ -56,7 +56,7 @@ namespace CurlUnity.Http
             return client.SendAsync(req, ct);
         }
 
-        /// <summary>POST multipart/form-data 表单。</summary>
+        /// <summary>POST multipart/form-data 表单。含 Stream part 时自动走流式上传。</summary>
         public static Task<IHttpResponse> PostMultipartAsync(this IHttpClient client, string url,
             MultipartFormData form, CancellationToken ct = default)
         {
@@ -65,9 +65,19 @@ namespace CurlUnity.Http
             {
                 Method = HttpMethod.Post,
                 Url = url,
-                Body = form.Build(),
-                Headers = new[] { new KeyValuePair<string, string>("Content-Type", form.ContentType) }
+                Headers = new[] { new KeyValuePair<string, string>("Content-Type", form.ContentType) },
             };
+            if (form.HasStreamParts)
+            {
+                // 流式: Stream part 按需从源读取,不全量进内存。BodyLength 取自 form 预算值,
+                // 发 Content-Length header;libcurl 据此按固定长度拉数据。
+                req.BodyStream = form.BuildStream();
+                req.BodyLength = form.ContentLength;
+            }
+            else
+            {
+                req.Body = form.Build();
+            }
             return client.SendAsync(req, ct);
         }
     }
