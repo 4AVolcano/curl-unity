@@ -64,7 +64,15 @@ public class AutoTestRunner : MonoBehaviour
 
         // File-based result output (for iOS/Android where log capture is unreliable)
         _resultPath = Path.Combine(Application.persistentDataPath, ResultFileName);
-        try { File.Delete(_resultPath); } catch { }
+        try
+        {
+            // 父目录可能不存在(e.g. 清理后首次跑), AppendAllText 会抛 DirectoryNotFoundException
+            // 然后被 Log() 的 try/catch 静默吞, 导致整个 file polling 通路失效。
+            var dir = Path.GetDirectoryName(_resultPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.Delete(_resultPath);
+        }
+        catch { /* best effort */ }
         Log($"INFO results_file={_resultPath}");
 
         var tests = new List<(string name, Func<CurlHttpClient, CancellationToken, Task> run)>
