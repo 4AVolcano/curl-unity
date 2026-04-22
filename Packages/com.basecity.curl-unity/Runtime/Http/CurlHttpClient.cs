@@ -46,6 +46,13 @@ namespace CurlUnity.Http
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
 
+        /// <summary>
+        /// 默认 User-Agent。对所有请求生效;请求级 <see cref="IHttpRequest.Headers"/>
+        /// 里设 <c>User-Agent</c> 会覆盖本值(libcurl slist 优先于 CURLOPT_USERAGENT)。
+        /// 默认 <c>"CurlUnity/0.1.0"</c>。设为 <c>null</c> 或空不覆盖 libcurl 默认。
+        /// </summary>
+        public string UserAgent { get; set; } = "CurlUnity/0.1.0";
+
         /// <summary>诊断统计。构造时 enableDiagnostics=true 才可用，否则为 null。</summary>
         public HttpDiagnostics Diagnostics { get; }
 
@@ -260,6 +267,14 @@ namespace CurlUnity.Http
             // HTTP version（枚举值与 curl 定义一致，直接 cast）
             CheckSetOpt("CURLOPT_HTTP_VERSION",
                 _api.SetOptLong(h, CurlNative.CURLOPT_HTTP_VERSION, (long)PreferredVersion));
+
+            // User-Agent: 设置 CURLOPT_USERAGENT; 请求级 Headers 里的 User-Agent 走
+            // slist 路径, 会覆盖这个值(libcurl 自身行为)。空/null 跳过, 保留 libcurl 默认。
+            if (!string.IsNullOrEmpty(UserAgent))
+            {
+                CheckSetOpt("CURLOPT_USERAGENT",
+                    _api.SetOptString(h, CurlNative.CURLOPT_USERAGENT, UserAgent));
+            }
 
             // 响应自动解压: "" 让 libcurl 使用编译时所有支持的算法(本项目链接了 zlib,
             // 所以是 gzip + deflate;brotli/zstd 编译时禁用了)。libcurl 会发
