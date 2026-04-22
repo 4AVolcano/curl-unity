@@ -13,7 +13,7 @@ namespace CurlUnity.Http
     /// 这些扩展只是拼接 <c>Authorization</c> header 的 shortcut,不走 libcurl 的
     /// <c>CURLOPT_USERPWD</c>/<c>CURLOPT_HTTPAUTH</c>,因此不支持 Digest/NTLM。
     /// 如果调用方之前已经在 <see cref="IHttpRequest.Headers"/> 里设过
-    /// <c>Authorization</c>, 这里**追加**一条新 header 而不替换, 由调用方自行保证
+    /// <c>Authorization</c>, 这里<b>追加</b>一条新 header 而不替换, 由调用方自行保证
     /// 不重复(HTTP 规范下 Authorization 出现多次行为未定义)。
     /// </remarks>
     public static class HttpRequestExtensions
