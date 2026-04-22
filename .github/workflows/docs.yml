@@ -1,0 +1,69 @@
+# 用 DocFX 生成 API 站点并发布到 GitHub Pages。
+#
+# 首次使用需要在 repo Settings → Pages → "Build and deployment" 里把 Source
+# 设为 "GitHub Actions"(而不是旧的 "Deploy from a branch")。
+#
+# 站点 URL: https://4avolcano.github.io/curl-unity/
+
+name: Docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - 'Packages/com.basecity.curl-unity/Runtime/**/*.cs'
+      - 'scripts/build-docs.sh'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# 同一时刻只允许一个 Pages 部署; 排队而非取消, 避免丢失对应 commit 的部署
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install docfx
+        # 固定版本, 避免 upstream 新版 break 文档构建; 升级走独立 PR
+        run: dotnet tool install -g docfx --version 2.78.3
+
+      - name: Add .NET tools to PATH
+        run: echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Build docs
+        working-directory: docs
+        run: |
+          docfx metadata docfx.json --logLevel warning --warningsAsErrors
+          docfx build docfx.json --logLevel warning --warningsAsErrors
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    needs: build
+    # workflow_dispatch 允许从任意分支手动触发, 但部署生产站只能来自 master
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

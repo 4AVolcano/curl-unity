@@ -1,5 +1,7 @@
 # curl-unity
 
+[![Docs](https://github.com/4AVolcano/curl-unity/actions/workflows/docs.yml/badge.svg)](https://4avolcano.github.io/curl-unity/)
+
 libcurl 的 Unity3D 原生封装，通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUIC)** 网络能力，支持 IL2CPP 运行时。
 
 用一套代码替代 UnityWebRequest，获得更现代的协议支持、更灵活的控制、以及真正可靠的跨平台 HTTPS 验证。
@@ -37,9 +39,10 @@ libcurl 的 Unity3D 原生封装，通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUI
 
 ## 文档
 
+- **在线文档站**: <https://4avolcano.github.io/curl-unity/> — 完整 API 参考 + 教程(master 每次更新自动部署)
 - [快速开始](docs/articles/getting-started.md) — 第一个 GET/POST 请求、常用场景、错误处理
 - [进阶使用](docs/articles/advanced.md) — 流式上传/下载、Multipart、代理、Cookie、诊断统计
-- **完整 API 参考** — 本地生成:`./scripts/build-docs.sh --serve` → http://localhost:8080(DocFX 静态站,未来会部署到 GitHub Pages)
+- 本地预览:`./scripts/build-docs.sh --serve` → http://localhost:8080
 
 ## 支持平台
 
