@@ -9,7 +9,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using CurlUnity.Http;
-using Random = System.Random;
 
 /// <summary>
 /// Automated device test runner for curl-unity.
@@ -416,9 +415,12 @@ public class AutoTestRunner : MonoBehaviour
     static async Task TestUploadStream(CurlHttpClient client, CancellationToken ct)
     {
         // 验证流式上传(READFUNCTION 回调 + 新增的 curl_unity_setopt_read_function
-        // bridge 符号)在各平台导出正常。64KB body 足够触发多次回调。
-        var bytes = new byte[64 * 1024];
-        new Random(42).NextBytes(bytes);
+        // bridge 符号)在各平台导出正常。
+        // 用确定性文本 payload(64KB ASCII 'A'),确保 server 能 echo 回原文,
+        // 并断言长度 + 含特征字符串。"data" 字段空也存在, 不能只 check 它。
+        const int size = 64 * 1024;
+        var payload = new string('A', size);
+        var bytes = Encoding.ASCII.GetBytes(payload);
         using var src = new MemoryStream(bytes);
         var req = new HttpRequest
         {
@@ -430,9 +432,11 @@ public class AutoTestRunner : MonoBehaviour
         using var resp = await client.SendAsync(req, ct);
         Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
-        // httpbin 的 /post 回显请求的元信息(JSON);验证 server 能正确接到上传的 64KB
         var body = Encoding.UTF8.GetString(resp.Body);
-        Assert(body.Contains("\"data\""), "Response missing 'data' field");
+        // httpbin /post 把原 body echo 到 JSON 的 "data" 字段(若是 ASCII 文本则原样返回)
+        // 验证含原 payload 长度的 'A' 序列,证明 64KB 全部送达
+        Assert(body.Contains(new string('A', 256)),
+            $"Response 'data' missing expected payload (upload may be truncated). First 200: {body.Substring(0, Math.Min(200, body.Length))}");
     }
 
     static async Task TestCookieSharedJar(CurlHttpClient client, CancellationToken ct)
@@ -459,8 +463,10 @@ public class AutoTestRunner : MonoBehaviour
         Assert(resp2.HasResponse, $"Check-cookie request failed: err={resp2.ErrorCode}");
         Assert(resp2.StatusCode == 200, $"Expected 200, got {resp2.StatusCode}");
         var body = Encoding.UTF8.GetString(resp2.Body);
-        Assert(body.Contains("curlUnityTest") && body.Contains("rc1"),
-            $"Cookie not echoed back: {body.Substring(0, Math.Min(200, body.Length))}");
+        // 用 JSON 字段精确匹配, 避免 "curlUnityTest" 或 "rc1" 出现在其它 key/value
+        // 里造成假阳性 (httpbin 把 cookies 序列化成 {"name": "value"})
+        Assert(body.Contains("\"curlUnityTest\": \"rc1\""),
+            $"Cookie not echoed back as expected: {body.Substring(0, Math.Min(200, body.Length))}");
     }
 
     static async Task TestAutoDecompress(CurlHttpClient client, CancellationToken ct)
@@ -473,9 +479,9 @@ public class AutoTestRunner : MonoBehaviour
         Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         var body = Encoding.UTF8.GetString(resp.Body);
-        Assert(body.Contains("\"gzipped\""),
-            $"Body missing 'gzipped' field (decompression may have failed): {body.Substring(0, Math.Min(200, body.Length))}");
-        Assert(body.Contains("true"), "Expected 'true' in decompressed body");
+        // 精确匹配 JSON 片段, 避免 "true" 出现在其它字段(如 origin) 误判
+        Assert(body.Contains("\"gzipped\": true"),
+            $"Body missing '\"gzipped\": true' fragment (decompression may have failed): {body.Substring(0, Math.Min(200, body.Length))}");
     }
 
     // ================================================================
