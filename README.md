@@ -62,11 +62,11 @@ libcurl 的 Unity3D 原生封装，通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUI
 
 | 库 | 版本 | 用途 |
 |---|---|---|
-| [curl](https://curl.se/) | 8.20.0-DEV | HTTP 客户端核心 |
-| [OpenSSL](https://www.openssl.org/) | 3.6.3 | TLS / HTTPS |
+| [curl](https://curl.se/) | 8.19.0 | HTTP 客户端核心 |
+| [OpenSSL](https://www.openssl.org/) | 3.6.2 | TLS / HTTPS |
 | [nghttp2](https://nghttp2.org/) | 1.68.1 | HTTP/2 |
 | [nghttp3](https://nghttp2.org/nghttp3/) | 1.15.0 | HTTP/3 |
-| [ngtcp2](https://nghttp2.org/ngtcp2/) | 1.22.0 | QUIC |
+| [ngtcp2](https://nghttp2.org/ngtcp2/) | 1.21.0 | QUIC |
 | [zlib](https://zlib.net/) | 1.3.2 | 压缩 (Windows/Android) |
 
 ## 项目结构
