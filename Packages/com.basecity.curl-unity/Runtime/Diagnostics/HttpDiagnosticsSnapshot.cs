@@ -1,3 +1,5 @@
+using CurlUnity.Http;
+
 namespace CurlUnity.Diagnostics
 {
     /// <summary>
