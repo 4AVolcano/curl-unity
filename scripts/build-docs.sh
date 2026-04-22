@@ -42,14 +42,16 @@ fi
 # ============================================================
 cd "$DOCS_DIR"
 
+# --warningsAsErrors 和 CI 保持一致,避免"本地通过 CI 挂"。
+# 开发阶段如果想先放过 warning, 临时注释即可; 推送前务必保持和 CI 同样严格。
 echo "==> 生成 API 元数据"
-docfx metadata docfx.json --logLevel warning
+docfx metadata docfx.json --logLevel warning --warningsAsErrors
 
 echo "==> 构建站点"
 if [[ "$SERVE" == "1" ]]; then
-    docfx build docfx.json --logLevel warning --serve
+    docfx build docfx.json --logLevel warning --warningsAsErrors --serve
 else
-    docfx build docfx.json --logLevel warning
+    docfx build docfx.json --logLevel warning --warningsAsErrors
     echo ""
     echo "构建完成: $SITE_DIR"
     echo "本地预览: ./scripts/build-docs.sh --serve"
