@@ -6,6 +6,7 @@ using System.Threading;
 #if UNITY_5_3_OR_NEWER
 using AOT;
 #endif
+using CurlUnity.Http;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
@@ -121,8 +122,8 @@ namespace CurlUnity.Core
             if (rc != CurlNative.CURLE_OK)
             {
                 _activeRequests.Remove(request);
-                var ex = new InvalidOperationException(
-                    $"curl_multi_add_handle failed (code {rc}): {_api.GetMultiErrorString(rc)}");
+                var ex = CurlHttpException.SetupFailure(rc,
+                    $"curl_multi_add_handle: {_api.GetMultiErrorString(rc)}");
                 FailComplete(request, ex);
             }
         }
@@ -136,8 +137,8 @@ namespace CurlUnity.Core
             if (rc == CurlNative.CURLE_OK) return true;
 
             // 这里还没进 _activeRequests，不需要 Remove
-            var ex = new InvalidOperationException(
-                $"curl_easy_setopt({optName}) failed (code {rc}): {_api.GetErrorString(rc)}");
+            var ex = CurlHttpException.SetupFailure(rc,
+                $"curl_easy_setopt({optName}): {_api.GetErrorString(rc)}");
             FailComplete(request, ex);
             return false;
         }
@@ -319,9 +320,9 @@ namespace CurlUnity.Core
 
                 var failResp = new CurlResponse
                 {
-                    FailureException = new InvalidOperationException(
-                        $"curl_multi_remove_handle returned {rcRemove} during completion. " +
-                        $"Handle leaked to avoid use-after-free."),
+                    FailureException = CurlHttpException.SetupFailure(rcRemove,
+                        $"curl_multi_remove_handle during completion: {_api.GetMultiErrorString(rcRemove)} " +
+                        $"(handle leaked to avoid use-after-free)"),
                     // EasyHandle 不转移所有权 → 保持 IntPtr.Zero
                 };
 
@@ -363,9 +364,12 @@ namespace CurlUnity.Core
             if (length > int.MaxValue) return UIntPtr.Zero; // 超出托管内存单次处理能力，通知 curl 中止
             var totalBytes = (int)length;
 
+            CurlRequest request;
+            try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
+            catch { return UIntPtr.Zero; }
+
             try
             {
-                var request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target;
                 var buffer = new byte[totalBytes];
                 Marshal.Copy(ptr, buffer, 0, totalBytes);
 
@@ -374,9 +378,13 @@ namespace CurlUnity.Core
                 else
                     request.BodyBuffer.Write(buffer, 0, totalBytes);
             }
-            catch
+            catch (Exception ex)
             {
-                return UIntPtr.Zero;
+                // 用户 DataCallback 抛异常: 记到 request.DownloadError,OnComplete 时由上层
+                // ExceptionDispatchInfo rethrow 原异常(保留栈)。与 UploadError 对称。
+                // 同一请求的 DownloadError 只保留第一个(后续回调不应再被调用,做防御)。
+                Interlocked.CompareExchange(ref request.DownloadError, ex, null);
+                return UIntPtr.Zero; // 触发 CURLE_WRITE_ERROR,让 curl 结束请求
             }
 
             return (UIntPtr)totalBytes;

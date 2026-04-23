@@ -46,7 +46,10 @@ namespace CurlUnity.UnitTests.Tests
             var task = client.GetAsync("http://example.invalid/");
             var completed = await Task.WhenAny(task, Task.Delay(300));
             Assert.Same(task, completed);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => task);
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(() => task);
+            // curl_multi_add_handle 失败归类为 SetupFailed,CurlCode = MultiAddHandleResult 设的值
+            Assert.Equal(HttpErrorKind.SetupFailed, ex.ErrorKind);
+            Assert.Equal(9, ex.CurlCode);
             // `using` 自动 Dispose，无需显式再调一次；fault 后的 task 也不需要再 await。
         }
 

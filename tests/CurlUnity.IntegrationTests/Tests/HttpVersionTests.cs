@@ -31,7 +31,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/protocol");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(HttpVersion.Http11, resp.Version);
 
@@ -46,7 +45,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.GetAsync($"{_server.HttpsUrl}/protocol");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(HttpVersion.Http2, resp.Version);
 
@@ -61,7 +59,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.GetAsync($"{_server.HttpsUrl}/hello");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal("Hello, World!", Encoding.UTF8.GetString(resp.Body));
         }
@@ -112,7 +109,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.GetAsync(H3TestUrl);
 
-            Assert.True(resp.HasResponse, $"Request failed: {resp.ErrorMessage}");
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(HttpVersion.Http3, resp.Version);
 
@@ -130,10 +126,8 @@ namespace CurlUnity.IntegrationTests.Tests
             // PreferH3 may fall back to HTTP/2 on first request, then upgrade.
             // Send twice to allow Alt-Svc discovery.
             using var resp1 = await _client.GetAsync(H3TestUrl);
-            Assert.True(resp1.HasResponse);
 
             using var resp2 = await _client.GetAsync(H3TestUrl);
-            Assert.True(resp2.HasResponse);
             Assert.Equal(200, resp2.StatusCode);
 
             var body = Encoding.UTF8.GetString(resp2.Body);
@@ -150,7 +144,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.GetAsync(H3TestUrl);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(HttpVersion.Http2, resp.Version);
 

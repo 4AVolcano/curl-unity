@@ -32,8 +32,6 @@ namespace CurlUnity.IntegrationTests.Tests
             var req = new HttpRequest { Url = $"{_server.HttpUrl}/gzip-text/8192" };
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse,
-                $"expected response, got error {resp.ErrorCode}: {resp.ErrorMessage}");
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(8192, resp.Body.Length);
             Assert.Equal(new string('A', 8192), Encoding.UTF8.GetString(resp.Body));
@@ -51,7 +49,6 @@ namespace CurlUnity.IntegrationTests.Tests
             };
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(8192, resp.Body.Length);
             Assert.Equal(new string('A', 8192), Encoding.UTF8.GetString(resp.Body));

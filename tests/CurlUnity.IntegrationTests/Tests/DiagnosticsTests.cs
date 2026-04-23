@@ -28,8 +28,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await client.GetAsync($"{_server.HttpUrl}/hello");
 
-            Assert.True(resp.HasResponse);
-
             var timing = client.Diagnostics.GetTiming(resp);
             Assert.True(timing.TotalTimeUs > 0, $"TotalTimeUs should be > 0, got {timing.TotalTimeUs}");
         }
@@ -42,9 +40,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp1 = await client.GetAsync($"{_server.HttpUrl}/hello");
             using var resp2 = await client.GetAsync($"{_server.HttpUrl}/json");
-
-            Assert.True(resp1.HasResponse);
-            Assert.True(resp2.HasResponse);
 
             var snapshot = client.Diagnostics.GetSnapshot();
             Assert.Equal(2, snapshot.TotalRequests);
@@ -59,9 +54,8 @@ namespace CurlUnity.IntegrationTests.Tests
             using var client = new CurlHttpClient(enableDiagnostics: true);
             client.PreferredVersion = HttpVersion.Default;
 
-            using var resp = await client.GetAsync("http://localhost:1/nope");
-
-            Assert.False(resp.HasResponse);
+            await Assert.ThrowsAsync<CurlHttpException>(
+                () => client.GetAsync("http://localhost:1/nope"));
 
             var snapshot = client.Diagnostics.GetSnapshot();
             Assert.Equal(1, snapshot.TotalRequests);
@@ -85,7 +79,6 @@ namespace CurlUnity.IntegrationTests.Tests
             {
                 foreach (var resp in responses)
                 {
-                    Assert.True(resp.HasResponse);
                     Assert.Equal(200, resp.StatusCode);
                 }
 
@@ -107,8 +100,6 @@ namespace CurlUnity.IntegrationTests.Tests
             client.PreferredVersion = HttpVersion.Default;
 
             using var resp = await client.GetAsync($"{_server.HttpUrl}/bytes/1000");
-
-            Assert.True(resp.HasResponse);
 
             var t = client.Diagnostics.GetTiming(resp);
             Assert.True(t.DnsTimeUs >= 0, $"DnsTimeUs={t.DnsTimeUs}");
@@ -132,8 +123,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await client.GetAsync($"{_server.HttpsUrl}/hello");
 
-            Assert.True(resp.HasResponse);
-
             var t = client.Diagnostics.GetTiming(resp);
             Assert.True(t.TlsTimeUs > 0, $"TlsTimeUs should be > 0 for HTTPS, got {t.TlsTimeUs}");
             Assert.True(t.ConnectTimeUs > 0, $"ConnectTimeUs={t.ConnectTimeUs}");
@@ -146,8 +135,6 @@ namespace CurlUnity.IntegrationTests.Tests
             client.PreferredVersion = HttpVersion.Default;
 
             using var resp = await client.GetAsync($"{_server.HttpUrl}/redirect/2");
-
-            Assert.True(resp.HasResponse);
 
             var t = client.Diagnostics.GetTiming(resp);
             Assert.True(t.RedirectTimeUs > 0,
@@ -163,8 +150,6 @@ namespace CurlUnity.IntegrationTests.Tests
             var body = new byte[5000];
             using var resp = await client.PostAsync($"{_server.HttpUrl}/echo", body, "application/octet-stream");
 
-            Assert.True(resp.HasResponse);
-
             var t = client.Diagnostics.GetTiming(resp);
             Assert.True(t.UploadBytes > 0, $"UploadBytes should be > 0 for POST, got {t.UploadBytes}");
         }
@@ -179,7 +164,6 @@ namespace CurlUnity.IntegrationTests.Tests
             for (int i = 0; i < 5; i++)
             {
                 using var resp = await client.GetAsync($"{_server.HttpUrl}/hello");
-                Assert.True(resp.HasResponse);
             }
 
             var snapshot = client.Diagnostics.GetSnapshot();
@@ -199,7 +183,6 @@ namespace CurlUnity.IntegrationTests.Tests
             client.PreferredVersion = HttpVersion.Default;
 
             using var resp = await client.GetAsync($"{_server.HttpUrl}/hello");
-            Assert.True(resp.HasResponse);
 
             var before = client.Diagnostics.GetSnapshot();
             Assert.Equal(1, before.TotalRequests);
@@ -222,7 +205,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             // Should still work without diagnostics
             using var resp = await client.GetAsync($"{_server.HttpUrl}/hello");
-            Assert.True(resp.HasResponse);
         }
     }
 }

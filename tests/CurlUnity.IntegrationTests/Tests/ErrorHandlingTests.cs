@@ -22,18 +22,19 @@ namespace CurlUnity.IntegrationTests.Tests
         public void Dispose() => _client.Dispose();
 
         [Fact]
-        public async Task ConnectionRefused_HasResponseIsFalse()
+        public async Task ConnectionRefused_Throws_ConnectFailed()
         {
             // Port 1 should not be listening
-            using var resp = await _client.GetAsync("http://localhost:1/nope");
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => _client.GetAsync("http://localhost:1/nope"));
 
-            Assert.False(resp.HasResponse);
-            Assert.NotEqual(0, resp.ErrorCode);
-            Assert.NotNull(resp.ErrorMessage);
+            Assert.Equal(HttpErrorKind.ConnectFailed, ex.ErrorKind);
+            Assert.NotEqual(0, ex.CurlCode); // CURLE_COULDNT_CONNECT = 7
+            Assert.False(string.IsNullOrEmpty(ex.Message));
         }
 
         [Fact]
-        public async Task Timeout_ReturnsCurlError()
+        public async Task Timeout_Throws_TimeoutKind()
         {
             var req = new HttpRequest
             {
@@ -41,31 +42,31 @@ namespace CurlUnity.IntegrationTests.Tests
                 TimeoutMs = 500,
             };
 
-            using var resp = await _client.SendAsync(req);
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => _client.SendAsync(req));
 
-            Assert.False(resp.HasResponse);
-            Assert.Equal(28, resp.ErrorCode); // CURLE_OPERATION_TIMEDOUT
+            Assert.Equal(HttpErrorKind.Timeout, ex.ErrorKind);
+            Assert.Equal(28, ex.CurlCode); // CURLE_OPERATION_TIMEDOUT
         }
 
         [Fact]
-        public async Task DnsFailure_ReturnsCurlError()
+        public async Task DnsFailure_Throws_DnsFailed()
         {
-            using var resp = await _client.GetAsync("http://this.host.does.not.exist.invalid/test");
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => _client.GetAsync("http://this.host.does.not.exist.invalid/test"));
 
-            Assert.False(resp.HasResponse);
-            Assert.NotEqual(0, resp.ErrorCode);
-            Assert.NotNull(resp.ErrorMessage);
+            Assert.Equal(HttpErrorKind.DnsFailed, ex.ErrorKind);
+            Assert.NotEqual(0, ex.CurlCode);
         }
 
         [Fact]
-        public async Task ErrorCode_HasMatchingMessage()
+        public async Task Exception_MessageContainsKindAndCode()
         {
-            using var resp = await _client.GetAsync("http://localhost:1/nope");
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => _client.GetAsync("http://localhost:1/nope"));
 
-            Assert.False(resp.HasResponse);
-            var msg = resp.ErrorMessage;
-            Assert.NotNull(msg);
-            Assert.True(msg.Length > 0);
+            Assert.Contains(ex.ErrorKind.ToString(), ex.Message);
+            Assert.Contains(ex.CurlCode.ToString(), ex.Message);
         }
 
         [Fact]
@@ -80,11 +81,15 @@ namespace CurlUnity.IntegrationTests.Tests
             };
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            using var resp = await _client.SendAsync(req);
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => _client.SendAsync(req));
             sw.Stop();
 
-            Assert.False(resp.HasResponse);
-            Assert.NotEqual(0, resp.ErrorCode);
+            // ConnectTimeoutMs 命中时,libcurl 可能返回 CURLE_OPERATION_TIMEDOUT (Timeout),
+            // 也可能先命中 OS 层 connect() 返回(ETIMEDOUT/EHOSTUNREACH),被包成
+            // CURLE_COULDNT_CONNECT (ConnectFailed) 或 CURLE_SEND/RECV_ERROR (NetworkIo)。
+            // 跨平台不稳定,只验证 CurlCode 非 0 + 时间远小于 total timeout。
+            Assert.NotEqual(0, ex.CurlCode);
             // Must complete well before total timeout (60s).
             // macOS TCP stack may add OS-level retries, so allow up to 15s.
             Assert.True(sw.ElapsedMilliseconds < 15000,
@@ -97,11 +102,15 @@ namespace CurlUnity.IntegrationTests.Tests
             using var client = new CurlHttpClient();
             client.VerifySSL = true; // default, but explicit for clarity
 
-            using var resp = await client.GetAsync($"{_server.HttpsUrl}/hello");
+            // Self-signed cert should be rejected. libcurl 在 macOS Secure Transport
+            // 后端下把 SecTrust 拒绝映射为 CURLE_COULDNT_CONNECT(ConnectFailed);在
+            // OpenSSL/mbedTLS 后端下是 CURLE_PEER_FAILED_VERIFICATION(TlsError)。
+            // 跨后端不稳定,只验证请求确实被拒。
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => client.GetAsync($"{_server.HttpsUrl}/hello"));
 
-            // Self-signed cert should be rejected by Apple SecTrust
-            Assert.False(resp.HasResponse);
-            Assert.NotEqual(0, resp.ErrorCode);
+            Assert.Contains(ex.ErrorKind, new[] { HttpErrorKind.TlsError, HttpErrorKind.ConnectFailed });
+            Assert.NotEqual(0, ex.CurlCode);
         }
     }
 }

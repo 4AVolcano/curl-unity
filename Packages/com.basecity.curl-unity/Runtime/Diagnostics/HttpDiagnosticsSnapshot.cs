@@ -8,11 +8,14 @@ namespace CurlUnity.Diagnostics
     /// </summary>
     public readonly struct HttpDiagnosticsSnapshot
     {
-        /// <summary>统计窗口内的总请求数(含失败)。</summary>
+        /// <summary>统计窗口内的总请求数(含失败)。取消和 build 前置用法错误不计入。</summary>
         public readonly int TotalRequests;
         /// <summary>收到完整 HTTP 响应的请求数(含 4xx/5xx)。</summary>
         public readonly int SuccessRequests;
-        /// <summary>连接/协议阶段失败的请求数(<see cref="IHttpResponse.HasResponse"/>=false)。</summary>
+        /// <summary>
+        /// 以 <see cref="CurlHttpException"/> 或用户回调异常失败的请求数。
+        /// 取消(<see cref="System.OperationCanceledException"/>)不计入。
+        /// </summary>
         public readonly int FailedRequests;
         /// <summary>出现过的不同 libcurl 连接 ID 数量。越小说明连接复用越好。</summary>
         public readonly int UniqueConnections;

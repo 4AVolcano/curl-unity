@@ -12,7 +12,6 @@ namespace CurlUnity.Http
     {
         private readonly ICurlApi _api;
         private IntPtr _easyHandle;
-        private readonly int _curlCode;
         private readonly long _statusCode;
         private readonly byte[] _body;
         private readonly byte[] _rawHeaders;
@@ -27,7 +26,6 @@ namespace CurlUnity.Http
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
             _easyHandle = raw.EasyHandle;
-            _curlCode = raw.CurlCode;
             _statusCode = raw.StatusCode;
             _body = raw.Body;
             _rawHeaders = raw.RawHeaders;
@@ -36,18 +34,7 @@ namespace CurlUnity.Http
         internal IntPtr EasyHandle => _easyHandle;
 
         public bool IsDisposed => _easyHandle == IntPtr.Zero;
-        public bool HasResponse => _curlCode == CurlNative.CURLE_OK;
         public int StatusCode => (int)_statusCode;
-        public int ErrorCode => _curlCode;
-
-        public string ErrorMessage
-        {
-            get
-            {
-                if (_curlCode == CurlNative.CURLE_OK) return null;
-                return _api.GetErrorString(_curlCode);
-            }
-        }
 
         public HttpVersion Version
         {

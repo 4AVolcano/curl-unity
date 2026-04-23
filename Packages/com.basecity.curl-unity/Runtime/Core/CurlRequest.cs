@@ -47,6 +47,12 @@ namespace CurlUnity.Core
         internal Stream UploadStream;
         internal Exception UploadError;
 
+        // 下载回调: 用户 DataCallback / BodyBuffer 写入时异常会被记到 DownloadError,
+        // 请求完成后由上层 ExceptionDispatchInfo rethrow 原异常(保留栈)。
+        // 与 UploadError 对称: 异常暂存 → 回调返回 0 让 libcurl 以 CURLE_WRITE_ERROR 结束请求
+        // → OnComplete 时看到 DownloadError 非空,优先 rethrow 用户异常,不包 CurlHttpException。
+        internal Exception DownloadError;
+
         private int _state = (int)CurlRequestState.Created;
         private bool _handleTransferred;
 

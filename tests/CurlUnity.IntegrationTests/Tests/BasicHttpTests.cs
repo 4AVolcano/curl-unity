@@ -27,7 +27,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/hello");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal("Hello, World!", Encoding.UTF8.GetString(resp.Body));
         }
@@ -37,7 +36,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/status/404");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(404, resp.StatusCode);
         }
 
@@ -46,7 +44,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/status/500");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(500, resp.StatusCode);
         }
 
@@ -57,7 +54,6 @@ namespace CurlUnity.IntegrationTests.Tests
             using var resp = await _client.PostAsync(
                 $"{_server.HttpUrl}/echo", Encoding.UTF8.GetBytes(body), "text/plain");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(body, Encoding.UTF8.GetString(resp.Body));
         }
@@ -69,7 +65,6 @@ namespace CurlUnity.IntegrationTests.Tests
             using var resp = await _client.PostJsonAsync(
                 $"{_server.HttpUrl}/echo", json);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(json, Encoding.UTF8.GetString(resp.Body));
         }
@@ -79,7 +74,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/json");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Contains("application/json", resp.ContentType);
             var text = Encoding.UTF8.GetString(resp.Body);
@@ -93,7 +87,6 @@ namespace CurlUnity.IntegrationTests.Tests
             const int size = 100_000;
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/bytes/{size}");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(size, resp.Body.Length);
         }
@@ -104,7 +97,6 @@ namespace CurlUnity.IntegrationTests.Tests
             const int size = 5000;
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/bytes/{size}");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(size, resp.ContentLength);
             Assert.Equal(resp.ContentLength, resp.Body.Length);
         }
@@ -114,7 +106,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/hello");
 
-            Assert.True(resp.HasResponse);
             // Kestrel uses chunked transfer for text, so Content-Length is unknown
             Assert.Equal(-1, resp.ContentLength);
         }

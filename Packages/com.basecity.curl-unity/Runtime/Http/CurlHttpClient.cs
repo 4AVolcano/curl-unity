@@ -139,25 +139,48 @@ namespace CurlUnity.Http
 
                 try
                 {
-                    // Pipeline 未到 libcurl 就失败的路径（add_handle 失败、非法状态提交等），
-                    // 直接以异常 complete Task，不构造 HttpResponse。
+                    // Pipeline 未到 libcurl 就失败的路径(add_handle 失败、非法状态提交、
+                    // remove_handle 失败等),FailureException 已经是 CurlHttpException 或
+                    // OperationCanceledException,直接透传。
                     if (curlResp.FailureException != null)
                     {
+                        Diagnostics?.RecordFailure();
                         tcs.TrySetException(curlResp.FailureException);
                         return;
                     }
 
-                    var response = new HttpResponse(_api, curlResp);
-
-                    // 流式上传:READFUNCTION 里 Stream.Read 抛异常会被记到 UploadError;
-                    // 这里检测到就放弃 response(释放 handle),把原异常透传给调用方。
+                    // 用户回调异常优先于 libcurl 返回码: Stream.Read / DataCallback 抛异常
+                    // 会让 libcurl 以 CURLE_ABORTED_BY_CALLBACK / CURLE_WRITE_ERROR 结束,
+                    // 但根因是用户代码,应 rethrow 原异常(保留栈),不包装 CurlHttpException。
                     if (curlReq.UploadError != null)
                     {
-                        response.Dispose();
+                        Diagnostics?.RecordFailure();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
+                            _api.EasyCleanup(curlResp.EasyHandle);
                         tcs.TrySetException(curlReq.UploadError);
                         return;
                     }
+                    if (curlReq.DownloadError != null)
+                    {
+                        Diagnostics?.RecordFailure();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
+                            _api.EasyCleanup(curlResp.EasyHandle);
+                        tcs.TrySetException(curlReq.DownloadError);
+                        return;
+                    }
 
+                    // libcurl 报错 → CurlHttpException,释放 handle,不给调用方 response。
+                    if (curlResp.CurlCode != CurlNative.CURLE_OK)
+                    {
+                        Diagnostics?.RecordFailure();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
+                            _api.EasyCleanup(curlResp.EasyHandle);
+                        tcs.TrySetException(CurlHttpException.FromEasyCode(
+                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode)));
+                        return;
+                    }
+
+                    var response = new HttpResponse(_api, curlResp);
                     Diagnostics?.Record(response);
 
                     if (!tcs.TrySetResult(response))
@@ -182,8 +205,12 @@ namespace CurlUnity.Http
             if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
             _worker.Dispose();
 
-            // Worker 已停止，所有未完成的 Task 设置异常
-            var ex = new ObjectDisposedException(nameof(CurlHttpClient));
+            // Worker 已停止。正在飞的请求被"打断",语义上等同于取消(不是
+            // "用了已关闭对象"),所以抛 OperationCanceledException 而非 ODE。
+            // 这样调用方无需同时 catch 两种异常类型——与 CancellationToken 取消
+            // 路径统一。SendAsync 入口的 IsDisposed 检查仍用 ODE(那是用法错误)。
+            var ex = new OperationCanceledException(
+                "Request aborted: CurlHttpClient was disposed while the request was pending.");
             foreach (var kv in _pendingTasks)
                 kv.Key.TrySetException(ex);
             _pendingTasks.Clear();
@@ -435,8 +462,12 @@ namespace CurlUnity.Http
         private void CheckSetOpt(string optName, int rc)
         {
             if (rc == CurlNative.CURLE_OK) return;
-            throw new InvalidOperationException(
-                $"curl_easy_setopt({optName}) failed (code {rc}): {_api.GetErrorString(rc)}");
+            // 把 CURLcode 映射成 CurlHttpException。URL 格式错会自然落到 InvalidUrl;
+            // 其它 setopt 失败通常是 SetupFailed / Unknown。保留 optName 便于日志定位。
+            throw new CurlHttpException(
+                CurlHttpException.MapEasyCode(rc),
+                rc,
+                $"curl_easy_setopt({optName}): {_api.GetErrorString(rc)}");
         }
     }
 }
