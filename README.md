@@ -3,6 +3,7 @@
 [![Test](https://github.com/4AVolcano/curl-unity/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/4AVolcano/curl-unity/actions/workflows/test.yml)
 [![Build](https://github.com/4AVolcano/curl-unity/actions/workflows/build.yml/badge.svg)](https://github.com/4AVolcano/curl-unity/actions/workflows/build.yml)
 [![Docs](https://github.com/4AVolcano/curl-unity/actions/workflows/docs.yml/badge.svg)](https://4avolcano.github.io/curl-unity/)
+[![codecov](https://codecov.io/gh/4AVolcano/curl-unity/branch/master/graph/badge.svg)](https://codecov.io/gh/4AVolcano/curl-unity)
 
 libcurl 的 Unity3D 原生封装，通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUIC)** 网络能力，支持 IL2CPP 运行时。
 

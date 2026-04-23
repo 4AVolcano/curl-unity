@@ -1,0 +1,33 @@
+# Codecov 配置。详细文档: https://docs.codecov.com/docs/codecov-yaml
+#
+# 刚接入, 先用宽松策略 —— 不阻塞 merge, 只把差异展示在 PR comment 里。
+# 等覆盖率基线稳定 (几个 PR 后), 再把 threshold 收紧。
+
+coverage:
+  status:
+    # 整体覆盖率变化
+    project:
+      default:
+        target: auto       # 以 base branch 当前值为目标
+        threshold: 1%      # 允许下降 1%, 避开 flaky test / 四舍五入抖动
+        informational: true  # 只展示不阻塞 merge (初期; 后期改 false)
+    # PR diff 里改动行的覆盖率
+    patch:
+      default:
+        target: 70%        # 新改动行至少 70% 被测
+        informational: true  # 同上, 初期不阻塞
+
+# PR comment 展示的内容
+comment:
+  layout: "header, diff, flags, components, files"
+  behavior: default        # 每次 push 更新同一条 comment, 不堆积
+  require_changes: false   # 即使覆盖率没变也发 comment (便于验证接入成功)
+
+# 排除不统计的路径 (补 coverlet.runsettings 的 ExcludeByFile, 双保险)
+ignore:
+  - "tests/**"
+  - "deps/**"
+  - "demo/**"
+  - "bridge/**"
+  - "Packages/com.basecity.curl-unity/Runtime/Plugins/**"
+  - "Packages/com.basecity.curl-unity/Editor/**"
