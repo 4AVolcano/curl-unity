@@ -64,15 +64,8 @@ public class CurlTest : MonoBehaviour
         {
             using var resp = await _http.GetAsync(url);
 
-            if (resp.HasResponse)
-            {
-                var body = resp.Body != null ? Encoding.UTF8.GetString(resp.Body) : "(no body)";
-                Log($"{resp.Version} {resp.StatusCode} [{resp.ContentType}]\n{body}");
-            }
-            else
-            {
-                Log($"FAILED [{resp.ErrorCode}]: {resp.ErrorMessage}");
-            }
+            var body = resp.Body != null ? Encoding.UTF8.GetString(resp.Body) : "(no body)";
+            Log($"{resp.Version} {resp.StatusCode} [{resp.ContentType}]\n{body}");
 
             // 单次请求 timing
             if (_http.Diagnostics != null)
@@ -88,9 +81,18 @@ public class CurlTest : MonoBehaviour
                     $"avgTTFB={snap.AvgFirstByteTimeUs/1000.0:F1}ms");
             }
         }
+        catch (CurlHttpException ex)
+        {
+            // 网络 / TLS / 超时 / 协议错
+            Log($"FAILED [{ex.ErrorKind}] curl({ex.CurlCode}): {ex.Message}");
+        }
+        catch (OperationCanceledException)
+        {
+            Log("CANCELED");
+        }
         catch (Exception ex)
         {
-            // 显式 catch，避免 async 异常消失在 Unity 控制台深处
+            // 兜底: 不期望到这里;到了就是 bug / 用法错误
             Log($"EXCEPTION: {ex.GetType().Name}: {ex.Message}");
         }
     }

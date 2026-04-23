@@ -27,7 +27,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/redirect/3");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal("final", Encoding.UTF8.GetString(resp.Body));
         }
@@ -43,7 +42,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(3, resp.RedirectCount);
         }
 
@@ -52,7 +50,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/redirect/2");
 
-            Assert.True(resp.HasResponse);
             Assert.EndsWith("/redirect/0", resp.EffectiveUrl);
         }
 
@@ -61,7 +58,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/redirect/0");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(0, resp.RedirectCount);
             Assert.Equal("final", Encoding.UTF8.GetString(resp.Body));
@@ -74,7 +70,6 @@ namespace CurlUnity.IntegrationTests.Tests
             // 不涉及 CURLOPT_MAXREDIRS 上限行为（libcurl 默认 -1 = 不限）。
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/redirect/20");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(20, resp.RedirectCount);
         }

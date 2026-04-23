@@ -45,7 +45,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Null(resp.Body); // Body is null in streaming mode
             Assert.True(chunks.Count > 0);
@@ -69,7 +68,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.True(callbackCount > 0);
         }
 
@@ -95,7 +93,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(bytes.Length, resp.Body.Length);
             var actualHex = Convert.ToHexString(SHA256.HashData(resp.Body)).ToLowerInvariant();
@@ -121,7 +118,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             var actualHex = Convert.ToHexString(SHA256.HashData(resp.Body)).ToLowerInvariant();
             Assert.Equal(expectedHex, actualHex);
@@ -145,7 +141,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(bytes.Length, resp.Body.Length);
         }

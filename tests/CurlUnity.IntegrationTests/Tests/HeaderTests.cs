@@ -39,7 +39,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
 
             var json = Encoding.UTF8.GetString(resp.Body);
@@ -64,7 +63,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.NotNull(resp.Headers);
 
@@ -86,7 +84,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Null(resp.Headers);
         }
 
@@ -95,7 +92,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/json");
 
-            Assert.True(resp.HasResponse);
             Assert.Contains("application/json", resp.ContentType);
         }
     }

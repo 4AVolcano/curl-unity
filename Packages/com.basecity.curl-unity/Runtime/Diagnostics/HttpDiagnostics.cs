@@ -89,6 +89,10 @@ namespace CurlUnity.Diagnostics
             }
         }
 
+        /// <summary>
+        /// 成功路径: 记录一次拿到 HTTP 响应的请求(含 4xx/5xx,它们不算失败)。由
+        /// <see cref="CurlHttpClient"/> 在构造 response 后调用。
+        /// </summary>
         internal void Record(HttpResponse response)
         {
             var timing = ReadTiming(response);
@@ -100,7 +104,7 @@ namespace CurlUnity.Diagnostics
             lock (_lock)
             {
                 _totalRequests++;
-                if (response.HasResponse) _successRequests++; else _failedRequests++;
+                _successRequests++;
 
                 if (timing.ConnectionId >= 0)
                     _connIds.Add(timing.ConnectionId);
@@ -112,6 +116,20 @@ namespace CurlUnity.Diagnostics
                 _sumTlsTimeUs += timing.TlsTimeUs;
                 _sumFirstByteTimeUs += timing.FirstByteTimeUs;
                 _sumTotalTimeUs += timing.TotalTimeUs;
+            }
+        }
+
+        /// <summary>
+        /// 失败路径: 记录一次在网络/协议层失败的请求(<see cref="CurlHttpException"/> 或
+        /// 用户回调 rethrow)。不计入 timing 和字节数(没有可靠数据)。由
+        /// <see cref="CurlHttpClient"/> 在抛异常前调用。取消和 build 阶段的用法错误不算。
+        /// </summary>
+        internal void RecordFailure()
+        {
+            lock (_lock)
+            {
+                _totalRequests++;
+                _failedRequests++;
             }
         }
 

@@ -30,7 +30,6 @@ namespace CurlUnity.IntegrationTests.Tests
             using var resp = await _client.PutAsync(
                 $"{_server.HttpUrl}/method-echo", Encoding.UTF8.GetBytes(body), "text/plain");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
 
             var json = JsonDocument.Parse(resp.Body);
@@ -43,7 +42,6 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             using var resp = await _client.DeleteAsync($"{_server.HttpUrl}/method-echo");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
 
             var json = JsonDocument.Parse(resp.Body);
@@ -64,7 +62,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
 
             var json = JsonDocument.Parse(resp.Body);
@@ -83,7 +80,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             // HEAD response must have no body
             Assert.True(resp.Body == null || resp.Body.Length == 0);
@@ -100,7 +96,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await _client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
 
             var json = JsonDocument.Parse(resp.Body);

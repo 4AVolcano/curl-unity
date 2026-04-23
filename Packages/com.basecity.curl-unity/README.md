@@ -22,6 +22,7 @@ libcurl 的 Unity3D 原生封装,通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUIC)
 ## 最小示例
 
 ```csharp
+using System;
 using CurlUnity.Http;
 using UnityEngine;
 
@@ -30,10 +31,17 @@ public class Example : MonoBehaviour
     async void Start()
     {
         using var client = new CurlHttpClient();
-        using var resp = await client.GetAsync("https://api.github.com/");
-
-        if (resp.HasResponse && resp.StatusCode == 200)
-            Debug.Log(System.Text.Encoding.UTF8.GetString(resp.Body));
+        try
+        {
+            using var resp = await client.GetAsync("https://api.github.com/");
+            if (resp.StatusCode == 200)
+                Debug.Log(System.Text.Encoding.UTF8.GetString(resp.Body));
+        }
+        catch (CurlHttpException ex)
+        {
+            // 网络 / TLS / 超时 / 协议错。按 ex.ErrorKind 做重试或上报策略。
+            Debug.LogError($"Request failed: {ex.ErrorKind} ({ex.CurlCode})");
+        }
     }
 }
 ```

@@ -166,7 +166,6 @@ public class AutoTestRunner : MonoBehaviour
     static async Task TestGetBasic(CurlHttpClient client, CancellationToken ct)
     {
         using var resp = await client.GetAsync("https://httpbin.org/get", ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         Assert(resp.Body != null && resp.Body.Length > 0, "Empty body");
     }
@@ -175,7 +174,6 @@ public class AutoTestRunner : MonoBehaviour
     {
         var json = "{\"test\":\"hello\",\"num\":42}";
         using var resp = await client.PostJsonAsync("https://httpbin.org/post", json, ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         var body = Encoding.UTF8.GetString(resp.Body);
         Assert(body.Contains("\"test\""), "Response missing posted JSON data");
@@ -192,8 +190,6 @@ public class AutoTestRunner : MonoBehaviour
         try
         {
             using var resp = await client.GetAsync("https://www.example.com/", ct);
-            Assert(resp.HasResponse,
-                $"HTTPS verification failed: err={resp.ErrorCode} {resp.ErrorMessage}");
             Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         }
         finally
@@ -209,7 +205,6 @@ public class AutoTestRunner : MonoBehaviour
         try
         {
             using var resp = await client.GetAsync("https://httpbin.org/get", ct);
-            Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
             // HTTP/2 = enum value 3
             Assert((int)resp.Version >= 3,
                 $"Expected HTTP/2+, got {resp.Version} ({(int)resp.Version})");
@@ -232,8 +227,6 @@ public class AutoTestRunner : MonoBehaviour
         try
         {
             using var resp = await client.GetAsync(H3TestUrl, ct);
-            Assert(resp.HasResponse,
-                $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
             Assert(resp.StatusCode == 200,
                 $"Expected 200, got {resp.StatusCode}");
             Assert(resp.Version == HttpVersion.Http3,
@@ -258,12 +251,8 @@ public class AutoTestRunner : MonoBehaviour
         try
         {
             using var resp1 = await client.GetAsync(H3TestUrl, ct);
-            Assert(resp1.HasResponse,
-                $"First request failed: err={resp1.ErrorCode} {resp1.ErrorMessage}");
 
             using var resp2 = await client.GetAsync(H3TestUrl, ct);
-            Assert(resp2.HasResponse,
-                $"Second request failed: err={resp2.ErrorCode} {resp2.ErrorMessage}");
             Assert(resp2.StatusCode == 200,
                 $"Expected 200, got {resp2.StatusCode}");
 
@@ -286,7 +275,6 @@ public class AutoTestRunner : MonoBehaviour
             EnableResponseHeaders = true
         };
         using var resp = await client.SendAsync(request, ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         Assert(resp.Headers != null, "Headers dict is null");
         Assert(resp.Headers.ContainsKey("x-curl-test"), "Missing X-Curl-Test header");
@@ -298,7 +286,6 @@ public class AutoTestRunner : MonoBehaviour
     static async Task TestRedirect(CurlHttpClient client, CancellationToken ct)
     {
         using var resp = await client.GetAsync("https://httpbin.org/redirect/3", ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200 after redirects, got {resp.StatusCode}");
         Assert(resp.RedirectCount >= 3,
             $"Expected >= 3 redirects, got {resp.RedirectCount}");
@@ -313,11 +300,16 @@ public class AutoTestRunner : MonoBehaviour
             Url = "https://httpbin.org/delay/30",
             TimeoutMs = 2000
         };
-        using var resp = await client.SendAsync(request, ct);
-        Assert(!resp.HasResponse, "Expected timeout but got response");
-        // CURLE_OPERATION_TIMEDOUT = 28
-        Assert(resp.ErrorCode == 28,
-            $"Expected CURLE_OPERATION_TIMEDOUT (28), got {resp.ErrorCode}: {resp.ErrorMessage}");
+        try
+        {
+            using var resp = await client.SendAsync(request, ct);
+            Assert(false, $"Expected timeout but got HTTP {resp.StatusCode}");
+        }
+        catch (CurlHttpException ex)
+        {
+            Assert(ex.ErrorKind == HttpErrorKind.Timeout,
+                $"Expected Timeout kind, got {ex.ErrorKind} (curl {ex.CurlCode})");
+        }
     }
 
     static async Task TestCancel(CurlHttpClient client, CancellationToken ct)
@@ -345,7 +337,6 @@ public class AutoTestRunner : MonoBehaviour
     {
         const int expectedSize = 102400; // 100KB
         using var resp = await client.GetAsync($"https://httpbin.org/bytes/{expectedSize}", ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         Assert(resp.Body != null, "Body is null");
         // Allow some tolerance (httpbin may return slightly different sizes)
@@ -366,7 +357,7 @@ public class AutoTestRunner : MonoBehaviour
         {
             foreach (var resp in responses)
             {
-                if (resp.HasResponse && resp.StatusCode == 200)
+                if (resp.StatusCode == 200)
                     successCount++;
             }
             Assert(successCount == count,
@@ -387,8 +378,7 @@ public class AutoTestRunner : MonoBehaviour
         // 5 sequential requests to the same host should reuse connections
         for (int i = 0; i < 5; i++)
         {
-            using var resp = await client.GetAsync("https://httpbin.org/get", ct);
-            Assert(resp.HasResponse, $"Request {i} failed: err={resp.ErrorCode}");
+            using (await client.GetAsync("https://httpbin.org/get", ct)) { }
         }
 
         if (client.Diagnostics != null)
@@ -410,14 +400,17 @@ public class AutoTestRunner : MonoBehaviour
             Url = "http://this.host.does.not.exist.invalid/",
             TimeoutMs = 5000
         };
-        using var resp = await client.SendAsync(request, ct);
-        Assert(!resp.HasResponse,
-            $"Expected failure but got HTTP {resp.StatusCode}");
-        Assert(resp.ErrorCode != 0,
-            $"Expected non-zero error code, got {resp.ErrorCode}");
-        // CURLE_COULDNT_RESOLVE_HOST (6) is ideal, but some networks
-        // DNS-hijack and return CURLE_GOT_NOTHING (52), CURLE_OPERATION_TIMEDOUT (28), etc.
-        // Any error is acceptable — the point is that the request failed gracefully.
+        try
+        {
+            using var resp = await client.SendAsync(request, ct);
+            Assert(false, $"Expected failure but got HTTP {resp.StatusCode}");
+        }
+        catch (CurlHttpException ex)
+        {
+            // DnsFailed 是理想结果, 但有些网络 DNS-hijack 让请求变成连接/超时失败。
+            // 任一失败 kind 都可接受——关键是请求以异常优雅地结束。
+            Assert(ex.CurlCode != 0, $"Expected non-zero curl code, got {ex.CurlCode}");
+        }
     }
 
     static async Task TestUploadStream(CurlHttpClient client, CancellationToken ct)
@@ -438,7 +431,6 @@ public class AutoTestRunner : MonoBehaviour
             BodyLength = src.Length,
         };
         using var resp = await client.SendAsync(req, ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         var body = Encoding.UTF8.GetString(resp.Body);
         // httpbin /post 把原 body echo 到 JSON 的 "data" 字段(若是 ASCII 文本则原样返回)
@@ -457,10 +449,7 @@ public class AutoTestRunner : MonoBehaviour
             Url = "https://httpbin.org/cookies/set?curlUnityTest=rc1",
             EnableCookies = true,
         };
-        using (var resp1 = await client.SendAsync(r1, ct))
-        {
-            Assert(resp1.HasResponse, $"Set-cookie request failed: err={resp1.ErrorCode}");
-        }
+        using (await client.SendAsync(r1, ct)) { }
 
         var r2 = new HttpRequest
         {
@@ -468,7 +457,6 @@ public class AutoTestRunner : MonoBehaviour
             EnableCookies = true,
         };
         using var resp2 = await client.SendAsync(r2, ct);
-        Assert(resp2.HasResponse, $"Check-cookie request failed: err={resp2.ErrorCode}");
         Assert(resp2.StatusCode == 200, $"Expected 200, got {resp2.StatusCode}");
         var body = Encoding.UTF8.GetString(resp2.Body);
         // 用 JSON 字段精确匹配, 避免 "curlUnityTest" 或 "rc1" 出现在其它 key/value
@@ -484,7 +472,6 @@ public class AutoTestRunner : MonoBehaviour
         // 会拿到原始压缩字节或请求直接失败)。
         // httpbin.org/gzip 强制返回 gzip 响应, 解压后 JSON 含 "gzipped": true。
         using var resp = await client.GetAsync("https://httpbin.org/gzip", ct);
-        Assert(resp.HasResponse, $"No response: err={resp.ErrorCode} {resp.ErrorMessage}");
         Assert(resp.StatusCode == 200, $"Expected 200, got {resp.StatusCode}");
         var body = Encoding.UTF8.GetString(resp.Body);
         // 精确匹配 JSON 片段, 避免 "true" 出现在其它字段(如 origin) 误判

@@ -52,7 +52,6 @@ namespace CurlUnity.IntegrationTests.Tests
             var req = new HttpRequest { Url = $"{_server.HttpUrl}/redirect-with-body/2" };
             using var resp = await client.SendAsync(req);
 
-            Assert.True(resp.HasResponse, $"err={resp.ErrorCode} msg={resp.ErrorMessage}");
             Assert.Equal(200, resp.StatusCode);
 
             var body = Encoding.UTF8.GetString(resp.Body);
@@ -83,7 +82,6 @@ namespace CurlUnity.IntegrationTests.Tests
             };
             using var resp = await client.SendAsync(req);
 
-            Assert.True(resp.HasResponse, $"err={resp.ErrorCode} msg={resp.ErrorMessage}");
             Assert.Equal(200, resp.StatusCode);
 
             var delivered = received.ToString();
@@ -145,7 +143,6 @@ namespace CurlUnity.IntegrationTests.Tests
 
             using var resp = await client.SendAsync(req);
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.NotNull(resp.Headers);
             Assert.False(resp.Headers.ContainsKey("location"));

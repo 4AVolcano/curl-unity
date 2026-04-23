@@ -33,7 +33,6 @@ namespace CurlUnity.IntegrationTests.Tests
             using var resp = await _client.PostAsync(
                 $"{_server.HttpUrl}/echo-bytes", body, "application/octet-stream");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(body, resp.Body);
         }
@@ -44,7 +43,6 @@ namespace CurlUnity.IntegrationTests.Tests
             using var resp = await _client.PostAsync(
                 $"{_server.HttpUrl}/echo", Array.Empty<byte>(), "text/plain");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
         }
 
@@ -54,7 +52,6 @@ namespace CurlUnity.IntegrationTests.Tests
             const int size = 1_000_000;
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/bytes/{size}");
 
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
             Assert.Equal(size, resp.Body.Length);
         }

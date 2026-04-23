@@ -59,9 +59,6 @@ namespace CurlUnity.IntegrationTests.Tests
                 TimeoutMs = 15000,
             };
             using var resp = await _client.SendAsync(req);
-
-            Assert.True(resp.HasResponse,
-                $"expected response via proxy {ProxyUrl}, got error {resp.ErrorCode}: {resp.ErrorMessage}");
             Assert.InRange(resp.StatusCode, 200, 399);
         }
 
@@ -71,10 +68,9 @@ namespace CurlUnity.IntegrationTests.Tests
             // 127.0.0.1:1 不监听, proxy 连接会失败; libcurl 此时不会绕过 proxy 直连
             _client.SetProxy(new HttpProxy("http://127.0.0.1:1"));
 
-            using var resp = await _client.GetAsync($"{_server.HttpUrl}/hello");
-
-            Assert.False(resp.HasResponse);
-            Assert.NotEqual(0, resp.ErrorCode);
+            var ex = await Assert.ThrowsAsync<CurlHttpException>(
+                () => _client.GetAsync($"{_server.HttpUrl}/hello"));
+            Assert.NotEqual(0, ex.CurlCode);
         }
 
         [Fact]
@@ -84,8 +80,6 @@ namespace CurlUnity.IntegrationTests.Tests
             _client.ClearProxy();
 
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/hello");
-
-            Assert.True(resp.HasResponse);
             Assert.Equal(200, resp.StatusCode);
         }
     }

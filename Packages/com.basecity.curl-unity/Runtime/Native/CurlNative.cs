@@ -82,7 +82,10 @@ namespace CurlUnity.Native
         public const int CURLOPT_INFILESIZE_LARGE = 30115;
 
         // READFUNCTION sentinel return values
-        public const long CURL_READFUNC_ABORT = 0x10000000;
+        // 对齐 curl.h 宏 #define CURL_READFUNC_ABORT 0x10000000 的 int 字面量语义。
+        // 使用 int 而非 long,避免跨平台 (UIntPtr)long 强转时的类型歧义 —— 非负 int 转
+        // UIntPtr 在 32/64 位平台都恒定安全,不依赖位宽讨论。
+        public const int CURL_READFUNC_ABORT = 0x10000000;
         public const int CURLOPT_SSL_OPTIONS = 216;
         public const long CURLSSLOPT_NATIVE_CA = 1 << 4;  // Use OS native CA store (Windows CryptoAPI)
 
