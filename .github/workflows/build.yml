@@ -8,7 +8,8 @@ name: Build
 #                    tag push 都从零编译 (Windows ~8min)。让 master push 也跑一下,
 #                    填充 cache, 后续 tag push 命中率接近 100% (<1min)。
 #                    publish-upm 有 tag 前缀 if 保护, master push 不会误发布;
-#                    artifact upload 也做 tag 条件, master 不占 storage。
+#                    artifact upload 做 "tag 或 workflow_dispatch" 条件, master
+#                    push 不占 storage, 手动触发仍能拿到产物供排障。
 #   * workflow_dispatch — 手动触发, 用于排障。
 on:
   push:
@@ -69,7 +70,7 @@ jobs:
           DYLD_LIBRARY_PATH=output/macOS/${{ matrix.arch }} ./build/verify
 
       - name: Upload artifact
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}
@@ -121,7 +122,7 @@ jobs:
           [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
 
       - name: Upload artifact
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: ios-arm64
@@ -185,7 +186,7 @@ jobs:
           [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
 
       - name: Upload artifact
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: android-${{ matrix.abi }}
@@ -263,7 +264,7 @@ jobs:
           verify.exe || exit /b 1
 
       - name: Upload artifact
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
