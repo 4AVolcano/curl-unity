@@ -51,16 +51,14 @@ echo "==> Normalising assembly names + merging coverage + generating HTML report
 # 不同 class, 导致 total coverable 翻倍、合并后数字被稀释。
 # 解决: 把两份 XML 的 package name 统一成 CurlUnity.Runtime, ReportGenerator 就能
 # 按 class name union 两份数据 (同一 class 在两边的 hit 合并, 未测的为 missed)。
+#
+# 用 sed + 临时文件做原地替换, 跨平台一致 (macOS BSD sed 的 -i 要求 '', GNU sed 不要,
+# 避开这个差异的最简单方式就是写临时文件再 mv)。不使用 python3, 避免引入额外依赖。
 for xml in $(find "$OUT_RAW" -name coverage.cobertura.xml); do
-    # BSD sed (macOS) 需要 -i '' 占位, GNU sed 接受 -i 无参; 用临时文件规避差异。
-    python3 -c "
-import re, sys
-p = '$xml'
-with open(p) as f: s = f.read()
-s = re.sub(r'<package name=\"(CurlUnity\.UnitTests|CurlUnity\.IntegrationTests)\"',
-           '<package name=\"CurlUnity.Runtime\"', s)
-with open(p, 'w') as f: f.write(s)
-"
+    sed \
+        -e 's|<package name="CurlUnity\.UnitTests"|<package name="CurlUnity.Runtime"|g' \
+        -e 's|<package name="CurlUnity\.IntegrationTests"|<package name="CurlUnity.Runtime"|g' \
+        "$xml" > "$xml.tmp" && mv "$xml.tmp" "$xml"
 done
 
 dotnet reportgenerator \

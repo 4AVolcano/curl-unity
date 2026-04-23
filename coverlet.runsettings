@@ -19,7 +19,8 @@
 <RunSettings>
   <DataCollectionRunSettings>
     <DataCollectors>
-      <DataCollector friendlyName="XPlat code coverage">
+      <!-- friendlyName 需要和 dotnet test 的 collect:"XPlat Code Coverage" 完全一致 (vstest 匹配大小写敏感) -->
+      <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
 
