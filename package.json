@@ -1,0 +1,18 @@
+{
+  "name": "com.basecity.curl-unity",
+  "version": "0.1.0-rc.2",
+  "displayName": "curl for Unity",
+  "description": "libcurl native bindings for Unity via P/Invoke. Supports HTTP/2, HTTP/3 (QUIC), OpenSSL.",
+  "unity": "2021.3",
+  "author": {
+    "name": "curl-unity"
+  },
+  "keywords": [
+    "curl",
+    "http",
+    "http2",
+    "http3",
+    "quic",
+    "networking"
+  ]
+}
