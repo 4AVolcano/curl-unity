@@ -139,13 +139,17 @@ namespace CurlUnity.Http
 
                 try
                 {
+                    // 计数原则: 只在我们真正 "拥有" 这次请求结果时 Record/RecordFailure —— 即
+                    // TrySet* 返回 true。如果 cancel 赢了竞态(ct.Register 的 TrySetCanceled
+                    // 先执行),这里的 TrySet* 会返回 false,就跳过计数,对齐"取消不计入"契约。
+
                     // Pipeline 未到 libcurl 就失败的路径(add_handle 失败、非法状态提交、
                     // remove_handle 失败等),FailureException 已经是 CurlHttpException 或
                     // OperationCanceledException,直接透传。
                     if (curlResp.FailureException != null)
                     {
-                        Diagnostics?.RecordFailure();
-                        tcs.TrySetException(curlResp.FailureException);
+                        if (tcs.TrySetException(curlResp.FailureException))
+                            Diagnostics?.RecordFailure();
                         return;
                     }
 
@@ -154,37 +158,37 @@ namespace CurlUnity.Http
                     // 但根因是用户代码,应 rethrow 原异常(保留栈),不包装 CurlHttpException。
                     if (curlReq.UploadError != null)
                     {
-                        Diagnostics?.RecordFailure();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
-                        tcs.TrySetException(curlReq.UploadError);
+                        if (tcs.TrySetException(curlReq.UploadError))
+                            Diagnostics?.RecordFailure();
                         return;
                     }
                     if (curlReq.DownloadError != null)
                     {
-                        Diagnostics?.RecordFailure();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
-                        tcs.TrySetException(curlReq.DownloadError);
+                        if (tcs.TrySetException(curlReq.DownloadError))
+                            Diagnostics?.RecordFailure();
                         return;
                     }
 
                     // libcurl 报错 → CurlHttpException,释放 handle,不给调用方 response。
                     if (curlResp.CurlCode != CurlNative.CURLE_OK)
                     {
-                        Diagnostics?.RecordFailure();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
-                        tcs.TrySetException(CurlHttpException.FromEasyCode(
-                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode)));
+                        if (tcs.TrySetException(CurlHttpException.FromEasyCode(
+                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode))))
+                            Diagnostics?.RecordFailure();
                         return;
                     }
 
                     var response = new HttpResponse(_api, curlResp);
-                    Diagnostics?.Record(response);
-
-                    if (!tcs.TrySetResult(response))
-                        response.Dispose();  // 取消赢得竞态时释放 handle
+                    if (tcs.TrySetResult(response))
+                        Diagnostics?.Record(response);
+                    else
+                        response.Dispose();  // 取消赢得竞态时释放 handle,不计入 Diagnostics
                 }
                 catch (Exception ex)
                 {
@@ -206,13 +210,14 @@ namespace CurlUnity.Http
             _worker.Dispose();
 
             // Worker 已停止。正在飞的请求被"打断",语义上等同于取消(不是
-            // "用了已关闭对象"),所以抛 OperationCanceledException 而非 ODE。
-            // 这样调用方无需同时 catch 两种异常类型——与 CancellationToken 取消
-            // 路径统一。SendAsync 入口的 IsDisposed 检查仍用 ODE(那是用法错误)。
-            var ex = new OperationCanceledException(
-                "Request aborted: CurlHttpClient was disposed while the request was pending.");
+            // "用了已关闭对象"),用 TrySetCanceled 让 Task 进入 Canceled 状态,
+            // 与 CancellationToken 路径一致(await 端拿到的都是 TaskCanceledException,
+            // 但 Task.IsCanceled=true,而不是 Faulted)。用 TrySetException(OCE) 会让
+            // Task.IsCanceled=false / IsFaulted=true,破坏 Task.WhenAll/ContinueWith
+            // 对 "取消 vs 失败" 的分支判断。
+            // SendAsync 入口的 IsDisposed 检查仍用 ODE(那是用法错误,不是运行时中断)。
             foreach (var kv in _pendingTasks)
-                kv.Key.TrySetException(ex);
+                kv.Key.TrySetCanceled();
             _pendingTasks.Clear();
 
             foreach (var kv in _cancellations)

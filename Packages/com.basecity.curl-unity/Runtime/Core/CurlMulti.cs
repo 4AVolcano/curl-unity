@@ -364,9 +364,24 @@ namespace CurlUnity.Core
             if (length > int.MaxValue) return UIntPtr.Zero; // 超出托管内存单次处理能力，通知 curl 中止
             var totalBytes = (int)length;
 
+            // GCHandle resolve 失败意味着 userdata 不是我们 alloc 的 handle,或 handle 已 Free ——
+            // 属于"不该发生"的内部状态异常。返回 0 让 curl 以 CURLE_WRITE_ERROR 收尾,同时
+            // log 以便定位根因(否则用户只会看到一个语义含糊的 write error)。
             CurlRequest request;
             try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
-            catch { return UIntPtr.Zero; }
+            catch (Exception resolveEx)
+            {
+                CurlLog.Error(
+                    $"OnWriteData: failed to resolve CurlRequest from userdata " +
+                    $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                return UIntPtr.Zero;
+            }
+            if (request == null)
+            {
+                CurlLog.Error(
+                    $"OnWriteData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                return UIntPtr.Zero;
+            }
 
             try
             {
@@ -400,9 +415,21 @@ namespace CurlUnity.Core
             if (length > int.MaxValue) return UIntPtr.Zero;
             var totalBytes = (int)length;
 
+            // GCHandle resolve 失败 log 但不影响主流程: header capture 是 best-effort,
+            // 失败时 response.Headers 会空缺,Body/StatusCode 仍正常。
+            CurlRequest request;
+            try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
+            catch (Exception resolveEx)
+            {
+                CurlLog.Error(
+                    $"OnHeaderData: failed to resolve CurlRequest from userdata " +
+                    $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                return UIntPtr.Zero;
+            }
+            if (request == null) return UIntPtr.Zero;
+
             try
             {
-                var request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target;
                 var buffer = new byte[totalBytes];
                 Marshal.Copy(ptr, buffer, 0, totalBytes);
 
@@ -461,9 +488,22 @@ namespace CurlUnity.Core
                 return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
             var want = (int)capacity;
 
+            // GCHandle resolve 失败 log 以便定位(否则用户只看到 CURLE_ABORTED_BY_CALLBACK)。
             CurlRequest request;
             try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
-            catch { return (UIntPtr)CurlNative.CURL_READFUNC_ABORT; }
+            catch (Exception resolveEx)
+            {
+                CurlLog.Error(
+                    $"OnReadData: failed to resolve CurlRequest from userdata " +
+                    $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
+            }
+            if (request == null)
+            {
+                CurlLog.Error(
+                    $"OnReadData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
+            }
 
             // 取消竞态:已 Cancelled 直接中止,避免继续读 stream(stream 可能已被 client Dispose)
             if (request.State == CurlRequestState.Cancelled)
