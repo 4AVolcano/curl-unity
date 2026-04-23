@@ -1,4 +1,4 @@
-# 运行 xUnit 集成测试套件。
+# 运行 xUnit 集成测试套件 + 收集覆盖率并上传到 Codecov。
 # 测试编译本身覆盖了 Runtime 源码的语法/类型检查，因此不再额外跑 compile-check。
 # 当前 macOS runner 跑 ARM64 dylib。后续可加 Windows matrix 扩展覆盖。
 
@@ -16,13 +16,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true   # 需要 Plugins/ 下的 dylib 二进制
+          fetch-depth: 0   # Codecov 需要完整 git 历史做 diff coverage 基线对比
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
 
-      - name: Run xUnit unit tests
-        run: dotnet test tests/CurlUnity.UnitTests/CurlUnity.UnitTests.csproj --configuration Release --logger "console;verbosity=normal"
+      - name: Run xUnit unit tests (with coverage)
+        run: |
+          dotnet test tests/CurlUnity.UnitTests/CurlUnity.UnitTests.csproj \
+            --configuration Release \
+            --logger "console;verbosity=normal" \
+            --collect:"XPlat Code Coverage" \
+            --settings coverlet.runsettings \
+            --results-directory ${{ github.workspace }}/TestResults/unit
 
-      - name: Run xUnit integration tests
-        run: dotnet test tests/CurlUnity.IntegrationTests/CurlUnity.IntegrationTests.csproj --configuration Release --logger "console;verbosity=normal"
+      - name: Run xUnit integration tests (with coverage)
+        run: |
+          dotnet test tests/CurlUnity.IntegrationTests/CurlUnity.IntegrationTests.csproj \
+            --configuration Release \
+            --logger "console;verbosity=normal" \
+            --collect:"XPlat Code Coverage" \
+            --settings coverlet.runsettings \
+            --results-directory ${{ github.workspace }}/TestResults/integration
+
+      # Codecov 会自动合并多份 cobertura 按源文件路径去重, 不需要本地那个 package name
+      # 归一化步骤 (scripts/coverage.sh 里那个 sed 只给本地 HTML 报告用)。
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ${{ github.workspace }}/TestResults/unit/*/coverage.cobertura.xml,${{ github.workspace }}/TestResults/integration/*/coverage.cobertura.xml
+          # public repo 无需 token, 但设 CODECOV_TOKEN secret 可以避开偶发 rate limit。
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # 初次接入, 宁可 Codecov 侧失败也不让测试 job 红, 数据缺一次不要紧。
+          # 稳定后可以收紧为 true。
+          fail_ci_if_error: false
+          # 用一份完整的 coverage 数据再加 flag, 方便 Codecov 前端按类别拆看。
+          flags: unittests,integrationtests
+          verbose: true
