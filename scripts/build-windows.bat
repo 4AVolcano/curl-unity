@@ -305,6 +305,14 @@ REM ============================================================
 REM Build libcurl (static)
 REM ============================================================
 :build_curl
+REM cache 命中时 libcurl.lib 已存在, 且依赖 (openssl/nghttp2/nghttp3/ngtcp2) 因为
+REM 共用 actions/cache key (submodule hash + 脚本 hash) 一起失效/恢复, libcurl.lib
+REM 的存在意味着依赖也是匹配版本, 安全跳过重编。
+if exist "%PREFIX%\lib\libcurl.lib" (
+    echo [SKIP] libcurl already built
+    goto :build_bridge
+)
+
 echo.
 echo ========================================
 echo   [%PLATFORM%] Building libcurl
@@ -361,6 +369,7 @@ echo   libcurl done.
 REM ============================================================
 REM Build bridge + collect output -> libcurl_unity.dll
 REM ============================================================
+:build_bridge
 echo.
 echo ========================================
 echo   [%PLATFORM%] Building bridge + DLL

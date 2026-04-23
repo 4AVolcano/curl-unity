@@ -420,6 +420,14 @@ _curl_common_args() {
 }
 
 build_libcurl() {
+  # cache 命中时 $PREFIX/lib/libcurl.a 已存在, 且依赖 (openssl/nghttp2/nghttp3/ngtcp2)
+  # 因为共用同一个 actions/cache key (基于 submodule hash + 脚本 hash) 一起失效 /
+  # 一起恢复, 所以 libcurl.a 的存在 = 依赖也是匹配的版本, 安全跳过。
+  if [[ -f "$PREFIX/lib/libcurl.a" ]]; then
+    echo "  [跳过] libcurl 已编译"
+    return
+  fi
+
   log "[$PLATFORM] 编译 libcurl"
   local start
   start=$(step_time)
