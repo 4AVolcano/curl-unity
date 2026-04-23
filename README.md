@@ -141,6 +141,35 @@ GitHub Actions 提供全平台自动构建：
 | push / PR to master | `test.yml` | 运行测试 |
 | 手动触发 | `build.yml` | workflow_dispatch（只构建，不发布） |
 
+## 测试
+
+两个 xUnit 项目:
+
+| 项目 | 驱动 | 侧重 |
+|------|------|------|
+| `tests/CurlUnity.UnitTests` | `FakeCurlApi` 模拟 libcurl | 托管逻辑 (状态机、lifecycle、错误处理) |
+| `tests/CurlUnity.IntegrationTests` | 真 libcurl + 本地 Kestrel | P/Invoke、协议、TLS、真实 I/O 行为 |
+
+```bash
+dotnet test tests/CurlUnity.UnitTests/CurlUnity.UnitTests.csproj
+dotnet test tests/CurlUnity.IntegrationTests/CurlUnity.IntegrationTests.csproj
+```
+
+### 覆盖率
+
+```bash
+dotnet tool restore               # 首次或新 clone 后跑一次,装 ReportGenerator
+./scripts/coverage.sh             # 跑测试 + 生成 HTML 报告
+./scripts/coverage.sh --open      # 生成后自动打开浏览器 (macOS/Linux/Windows)
+```
+
+产物在 `build/coverage/report/index.html`,文本 summary 在 `Summary.txt`。
+
+- **Runtime 源码通过 `<Compile Include>` 链进 test assembly**,所以 `coverlet.runsettings` 里 `IncludeTestAssembly=true` 是必须的 (默认 false 会把整个 test project 排除,结果为 0 覆盖)
+- `scripts/coverage.sh` 在合并两份 cobertura 前把 package name 归一化为 `CurlUnity.Runtime`,否则 ReportGenerator 会把两个 test assembly 里同一份源码的 class 当成两份统计,导致合并数字被稀释
+- **Unity 专属分支** (`#if UNITY_5_3_OR_NEWER`) 在 dotnet test 下走不到,会拉低 `CurlLog` 等类的覆盖率,看报告时心里知情
+- Native `bridge/curl_unity_bridge.c` 不在覆盖范围 (Coverlet 只插桩 IL)
+
 ## 开发计划
 
 ### Phase 1: Native 库构建 ✅

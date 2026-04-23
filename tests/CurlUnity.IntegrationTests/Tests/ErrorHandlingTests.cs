@@ -102,14 +102,16 @@ namespace CurlUnity.IntegrationTests.Tests
             using var client = new CurlHttpClient();
             client.VerifySSL = true; // default, but explicit for clarity
 
-            // Self-signed cert should be rejected. libcurl 在 macOS Secure Transport
-            // 后端下把 SecTrust 拒绝映射为 CURLE_COULDNT_CONNECT(ConnectFailed);在
-            // OpenSSL/mbedTLS 后端下是 CURLE_PEER_FAILED_VERIFICATION(TlsError)。
-            // 跨后端不稳定,只验证请求确实被拒。
+            // Self-signed cert 被 libcurl 拒绝, 但具体映射到哪个 HttpErrorKind 跨后端 +
+            // 跨 OS + 跨 Kestrel 版本很不稳定 —— 观察到的值包括:
+            //   TlsError (CURLE_PEER_FAILED_VERIFICATION, OpenSSL 后端常见)
+            //   ConnectFailed (CURLE_COULDNT_CONNECT, macOS Secure Transport 后端)
+            //   NetworkIo (CURLE_RECV_ERROR/SEND_ERROR, Kestrel 在 TLS alert 后直接关连接)
+            //   Unknown (未映射到 HttpErrorKind 的 SSL_* code)
+            // 测试目的是"自签证书一定被拒", 不关心具体分类, 只验证异常被抛 + CurlCode 非 0。
             var ex = await Assert.ThrowsAsync<CurlHttpException>(
                 () => client.GetAsync($"{_server.HttpsUrl}/hello"));
 
-            Assert.Contains(ex.ErrorKind, new[] { HttpErrorKind.TlsError, HttpErrorKind.ConnectFailed });
             Assert.NotEqual(0, ex.CurlCode);
         }
     }

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Coverlet settings for coverage collection via dotnet test.
+  Usage: see scripts/coverage.sh
+
+  Key config notes:
+    IncludeTestAssembly=true 是关键 —— 两个 test project 把 Packages 下的 Runtime
+    source 用 Compile Include 直接编进自己的 assembly (CurlUnity.UnitTests /
+    CurlUnity.IntegrationTests), 所以被测代码就在 test assembly 里。Coverlet 默认
+    IncludeTestAssembly=false 会把整个 test project 排除, 结果 0 覆盖。
+
+    ExcludeByFile 把 tests 自己的测试源码 + Plugins + Editor + deps 排除,
+    只统计 Packages 下 Runtime 的代码。Linked source 在 PDB 里保留原路径
+    (Packages/...), 所以路径匹配按原路径做。
+
+    Unity 专属分支 (#if UNITY_5_3_OR_NEWER) 在 dotnet test 下走不到, 会降低表观
+    覆盖率。无法在这里通过条件编译 exclude, 看报告时心里知情。
+-->
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <!-- friendlyName 需要和 dotnet test 的 collect:"XPlat Code Coverage" 完全一致 (vstest 匹配大小写敏感) -->
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+
+          <!-- Runtime 源码在 test assembly 里, 必须开这个才被插桩 -->
+          <IncludeTestAssembly>true</IncludeTestAssembly>
+
+          <!-- 只统计 CurlUnity namespace 下的类型 (Runtime 都在这); 排除 tests 自己 -->
+          <Exclude>[*]CurlUnity.UnitTests.*,[*]CurlUnity.IntegrationTests.*</Exclude>
+
+          <!-- 按源文件路径再过滤一次, 把 tests / Plugins / Editor / deps / obj / bin 都排掉 -->
+          <ExcludeByFile>**/tests/**,**/Packages/com.basecity.curl-unity/Runtime/Plugins/**,**/Packages/com.basecity.curl-unity/Editor/**,**/obj/**,**/bin/**,**/deps/**</ExcludeByFile>
+
+          <!-- 编译器生成的 closure / display class / async state machine 不算 -->
+          <ExcludeByAttribute>Obsolete,GeneratedCode,CompilerGenerated</ExcludeByAttribute>
+
+          <!-- 一次命中足够, 不累计 hit count; 报告时更快 -->
+          <SingleHit>true</SingleHit>
+          <UseSourceLink>false</UseSourceLink>
+          <DeterministicReport>false</DeterministicReport>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
