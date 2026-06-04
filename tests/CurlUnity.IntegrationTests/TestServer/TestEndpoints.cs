@@ -223,6 +223,32 @@ namespace CurlUnity.IntegrationTests.TestServer
                 }
                 return Results.Text(sb.ToString(), "text/plain");
             });
+
+            // SSE: 推 count 条事件后结束连接（handler 返回 → 流关闭 → 客户端收到 EOF）。
+            // delayMs 用于在事件间制造间隔，便于测试取消。
+            app.MapGet("/sse", async (HttpContext ctx) =>
+            {
+                ctx.Response.ContentType = "text/event-stream";
+                ctx.Response.Headers["Cache-Control"] = "no-cache";
+                int count = int.TryParse((string)ctx.Request.Query["count"], out var c) ? c : 3;
+                int delayMs = int.TryParse((string)ctx.Request.Query["delayMs"], out var d) ? d : 0;
+                for (int i = 0; i < count; i++)
+                {
+                    await ctx.Response.WriteAsync($"id: {i}\nevent: tick\ndata: msg-{i}\n\n");
+                    await ctx.Response.Body.FlushAsync();
+                    if (delayMs > 0) await Task.Delay(delayMs, ctx.RequestAborted);
+                }
+            });
+
+            // SSE over POST: 回显请求 body 作为单个事件，验证复用 HttpRequest 的 POST + body。
+            app.MapPost("/sse-post", async (HttpContext ctx) =>
+            {
+                using var reader = new StreamReader(ctx.Request.Body);
+                var body = await reader.ReadToEndAsync();
+                ctx.Response.ContentType = "text/event-stream";
+                await ctx.Response.WriteAsync($"data: {body}\n\n");
+                await ctx.Response.Body.FlushAsync();
+            });
         }
     }
 }

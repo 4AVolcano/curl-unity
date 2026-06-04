@@ -46,6 +46,9 @@ namespace CurlUnity.Http
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
 
+        /// <summary>开启 libcurl CURLOPT_VERBOSE,内部活动写到 stderr。仅诊断用,默认 false。</summary>
+        public bool Verbose { get; set; } = false;
+
         /// <summary>
         /// 默认 User-Agent。对所有请求生效;请求级 <see cref="IHttpRequest.Headers"/>
         /// 里设 <c>User-Agent</c> 会覆盖本值(libcurl slist 优先于 CURLOPT_USERAGENT)。
@@ -300,6 +303,15 @@ namespace CurlUnity.Http
 
             // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
             CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
+
+            // TCP 调优：SSE/低延迟长连接建议开启。默认 false → 不设，沿用 libcurl 缺省。
+            if (request.TcpNoDelay)
+                CheckSetOpt("CURLOPT_TCP_NODELAY", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_NODELAY, 1));
+            if (request.TcpKeepAlive)
+                CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
+
+            // CURLOPT_VERBOSE = 41 (CURLOPTTYPE_LONG + 41)。诊断用,默认关。
+            if (Verbose) _api.SetOptLong(h, 41, 1);
 
             // HTTP version（枚举值与 curl 定义一致，直接 cast）
             CheckSetOpt("CURLOPT_HTTP_VERSION",
