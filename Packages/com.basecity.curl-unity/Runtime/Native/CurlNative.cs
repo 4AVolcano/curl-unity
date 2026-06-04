@@ -86,6 +86,10 @@ namespace CurlUnity.Native
         public const int CURLOPT_UPLOAD = 46;
         public const int CURLOPT_INFILESIZE_LARGE = 30115;
 
+        // TCP 调优（SSE/低延迟长连接建议显式开启；普通请求默认不设，沿用 libcurl 缺省）
+        public const int CURLOPT_TCP_NODELAY = 121;
+        public const int CURLOPT_TCP_KEEPALIVE = 213;
+
         // READFUNCTION sentinel return values
         // 对齐 curl.h 宏 #define CURL_READFUNC_ABORT 0x10000000 的 int 字面量语义。
         // 使用 int 而非 long,避免跨平台 (UIntPtr)long 强转时的类型歧义 —— 非负 int 转

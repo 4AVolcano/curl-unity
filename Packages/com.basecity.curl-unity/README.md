@@ -50,7 +50,7 @@ public class Example : MonoBehaviour
 
 - **在线文档站**: <https://4avolcano.github.io/curl-unity/>
 - [快速开始](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/getting-started.md)
-- [进阶使用](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/advanced.md) — 流式上传下载、Multipart、代理、Cookie、诊断
+- [进阶使用](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/advanced.md) — 流式上传下载、SSE、Multipart、代理、Cookie、诊断
 
 ## 源码 / Issues
 

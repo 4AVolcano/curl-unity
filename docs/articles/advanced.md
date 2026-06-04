@@ -63,6 +63,68 @@ using var resp = await client.SendAsync(req);
 // 此时 resp.Body == null (流式下载不缓冲到内存)
 ```
 
+## Server-Sent Events (SSE)
+
+SSE (`text/event-stream`) 在 `CurlUnity.Sse` 命名空间，按「协议核心 / 工程策略」分两层：
+
+- **`SseEventParser`** — 纯协议解析器，喂字节出事件，零网络依赖，可独立复用。
+- **`ReadServerSentEventsAsync`** — `IHttpClient` 扩展方法，在一个 `IHttpRequest` 上读**一段** SSE 连接，把响应体增量解析成 `SseEvent` 回调出来；连接结束(服务端关流 / 网络错误 / 取消)即返回。
+
+```csharp
+using CurlUnity.Http;
+using CurlUnity.Sse;
+
+var req = new HttpRequest
+{
+    Url = "https://example.com/events",
+    TimeoutMs = 0,        // SSE 长连接不设整体超时
+    TcpNoDelay = true,    // 事件不被 Nagle 合并,降低推送延迟
+    TcpKeepAlive = true,  // OS 周期探活,尽早发现死连接
+};
+
+// onEvent 在 worker 线程触发,禁止阻塞 —— 要碰 Unity API 时自行 marshal 到主线程
+using var resp = await client.ReadServerSentEventsAsync(req, evt =>
+{
+    Debug.Log($"[{evt.EventType}] {evt.Data} (id={evt.LastEventId})");
+});
+// 连接结束后返回;HTTP 4xx/5xx 不抛,按 resp.StatusCode 判断
+```
+
+要点:
+
+- `Accept: text/event-stream` 由库缺省补上(用户已设 Accept 则不覆盖),且**不修改**传入的 `request`。
+- 支持任意 method + body:SSE 订阅常用 `POST` + JSON 参数,直接用 `HttpRequest.Method` / `Body`。
+- 回调在 **worker 线程**,与 `OnDataReceived` 一致;`request` 上不能再设 `OnDataReceived`(SSE 需接管,已设会 throw)。
+
+### 重连 / Last-Event-ID
+
+`ReadServerSentEventsAsync` 是**单连接原语,不重连** —— 重连 / 退避 / 心跳属工程策略,按需自行组合。`SseEventParser` 暴露 `LastEventId` / `RetryMilliseconds`,可据此用 `SendAsync` 实现断线续传(复用同一个 parser 跨连接):
+
+```csharp
+var parser = new SseEventParser();
+while (!ct.IsCancellationRequested)
+{
+    var headers = new List<KeyValuePair<string, string>>
+    {
+        new KeyValuePair<string, string>("Accept", "text/event-stream"),
+    };
+    if (!string.IsNullOrEmpty(parser.LastEventId)) // 断线续传:带上最后事件 id
+        headers.Add(new KeyValuePair<string, string>("Last-Event-ID", parser.LastEventId));
+
+    var req = new HttpRequest
+    {
+        Url = url, TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true,
+        Headers = headers,
+        OnDataReceived = (b, o, l) => parser.Feed(b, o, l, OnEvent),
+    };
+    try { using var _ = await client.SendAsync(req, ct); }
+    catch (CurlHttpException) { /* 网络错,下面退避后重连 */ }
+
+    var delay = parser.RetryMilliseconds ?? 1000; // 服务端 retry: 优先,否则默认
+    await Task.Delay(delay, ct);
+}
+```
+
 ## 代理
 
 ```csharp
