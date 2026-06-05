@@ -53,7 +53,12 @@ namespace CurlUnity.Sse
 
         /// <summary>
         /// 单连接读取的内部实现。<paramref name="parser"/> 由调用方持有（便于上层跨重连复用其
-        /// <see cref="SseEventParser.LastEventId"/>/<see cref="SseEventParser.RetryMilliseconds"/>），
+        /// <see cref="SseEventParser.LastEventId"/>/<see cref="SseEventParser.RetryMilliseconds"/>）。
+        /// <para>
+        /// <b>本方法不重置 parser</b>：跨连接复用同一 parser 时，调用方须在每个连接边界先调用
+        /// <see cref="SseEventParser.Reset"/>，清理上一连接的半行/半事件与 BOM 状态，否则会串流。
+        /// 公开入口 <see cref="ReadServerSentEventsAsync"/> 每次新建 parser，无此顾虑。
+        /// </para>
         /// <paramref name="onByteReceived"/> 在每块字节到达时回调（上层做空闲/心跳计时，本层可传 null）。
         /// </summary>
         internal static Task<IHttpResponse> RunOneConnectionAsync(
