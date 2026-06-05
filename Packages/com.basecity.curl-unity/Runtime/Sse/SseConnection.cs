@@ -8,7 +8,7 @@ namespace CurlUnity.Sse
     /// <summary>
     /// <see cref="ISseConnection"/> 的实现：在 Layer 1 <see cref="SseCoreExtensions.RunOneConnectionAsync"/>
     /// 之上跑重连循环，叠加指数退避、<c>Last-Event-ID</c> 注入、<c>retry:</c> 响应、空闲/心跳超时、状态机。
-    /// 构造即开始连接（循环在后台异步运行）。
+    /// 构造即开始连接（循环在后台线程运行）。
     /// </summary>
     internal sealed class SseConnection : ISseConnection
     {
@@ -35,17 +35,25 @@ namespace CurlUnity.Sse
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _requestFactory = requestFactory ?? throw new ArgumentNullException(nameof(requestFactory));
+
             _options = options ?? new SseConnectionOptions();
+            // 构造时校验 options，非法配置 fail-fast，避免循环里静默关闭/反复报错
+            if (_options.ReconnectDelayInit < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(options), "ReconnectDelayInit 不能为负。");
+            if (_options.ReconnectDelayIncFn == null)
+                throw new ArgumentNullException(nameof(options), "ReconnectDelayIncFn 不能为 null。");
+            if (_options.IdleTimeout is TimeSpan idle && idle <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(options), "IdleTimeout 必须为正（null 表示不启用）。");
+
             _disposeCts = new CancellationTokenSource();
             _linkedCt = CancellationTokenSource.CreateLinkedTokenSource(ct, _disposeCts.Token);
-            _ = RunLoopAsync();
+            // 在后台线程跑循环：避免捕获调用方（可能是 Unity 主线程）的 SynchronizationContext，
+            // 保证所有回调都在后台线程触发（含 requestFactory 同步抛错的 OnError）。
+            _ = Task.Run(RunLoopAsync);
         }
 
         private async Task RunLoopAsync()
         {
-            // 让 OpenSse/构造方有同步窗口挂回调，再触发任何事件/状态变更
-            await Task.Yield();
-
             var delay = _options.ReconnectDelayInit;
             try
             {
@@ -76,11 +84,11 @@ namespace CurlUnity.Sse
                             {
                                 try { _idleCts?.CancelAfter(hb); } catch (ObjectDisposedException) { }
                             }
+                            // 仅置 Open；退避重置移到「确认 2xx」后，避免非 2xx 响应体字节误重置退避
                             if (!hadByte)
                             {
                                 hadByte = true;
                                 SetState(SseConnectionState.Open);
-                                delay = _options.ReconnectDelayInit; // 连接成功 → 重置退避
                             }
                         }
 
@@ -89,8 +97,13 @@ namespace CurlUnity.Sse
                             _client, request, _parser, RaiseEvent, OnByte, sendTok, lastEventId)
                             .ConfigureAwait(false);
 
-                        // 走到这 = 服务端正常关流(EOF) 或非 2xx（4xx/5xx 不抛）
-                        if (resp.StatusCode < 200 || resp.StatusCode >= 300)
+                        // 已知限制（待 Core「响应头就绪回调」解决）：状态码要到连接结束才能确认，
+                        // 故非 2xx 响应体若恰为 SSE 格式，可能已先触发少量事件 / 短暂 Open。
+                        if (resp.StatusCode == 204)
+                            break; // SSE 规范：204 No Content = 服务端要求停止重连
+                        if (resp.StatusCode >= 200 && resp.StatusCode < 300)
+                            delay = _options.ReconnectDelayInit; // 确认 2xx → 重置退避
+                        else
                             RaiseError(new SseHttpStatusException(resp.StatusCode));
                     }
                     catch (OperationCanceledException) when (_linkedCt.IsCancellationRequested)
@@ -127,7 +140,7 @@ namespace CurlUnity.Sse
             }
             finally
             {
-                SetState(SseConnectionState.Closed);
+                SetState(SseConnectionState.Closed); // 终态在后台线程触发（不在 Dispose 调用线程）
                 _linkedCt.Dispose();
                 _disposeCts.Dispose();
             }
@@ -165,9 +178,8 @@ namespace CurlUnity.Sse
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            try { _disposeCts.Cancel(); } catch (ObjectDisposedException) { } // 与循环 finally 的 Dispose 竞争兜底
-            SetState(SseConnectionState.Closed); // 即时反馈；循环 finally 也会到 Closed（幂等）
-            // 不在调用方线程 join 循环 Task，避免阻塞
+            // 只取消；终态 Closed 由循环 finally 在后台线程置（遵守「回调在后台线程」契约）。
+            try { _disposeCts.Cancel(); } catch (ObjectDisposedException) { }
         }
     }
 }
