@@ -15,6 +15,7 @@ namespace CurlUnity.Sse
     public static class SseCoreExtensions
     {
         private const string AcceptHeaderName = "Accept";
+        private const string LastEventIdHeaderName = "Last-Event-ID";
         private const string EventStreamContentType = "text/event-stream";
 
         /// <summary>
@@ -63,13 +64,14 @@ namespace CurlUnity.Sse
         /// </summary>
         internal static Task<IHttpResponse> RunOneConnectionAsync(
             IHttpClient client, IHttpRequest request, SseEventParser parser,
-            Action<SseEvent> onEvent, Action onByteReceived, CancellationToken ct)
+            Action<SseEvent> onEvent, Action onByteReceived, CancellationToken ct,
+            string lastEventId = null)
         {
             if (request.OnDataReceived != null)
                 throw new InvalidOperationException(
                     "SSE 需接管响应流式回调；请勿在传入的 request 上设置 OnDataReceived。");
 
-            var sseRequest = CloneForSse(request);
+            var sseRequest = CloneForSse(request, lastEventId);
             sseRequest.OnDataReceived = (buf, offset, len) =>
             {
                 onByteReceived?.Invoke();
@@ -78,14 +80,14 @@ namespace CurlUnity.Sse
             return client.SendAsync(sseRequest, ct);
         }
 
-        /// <summary>复制为新的 <see cref="HttpRequest"/>，缺省补 Accept，不改动调用方对象。</summary>
-        private static HttpRequest CloneForSse(IHttpRequest src)
+        /// <summary>复制为新的 <see cref="HttpRequest"/>，缺省补 Accept 与（可选）Last-Event-ID，不改动调用方对象。</summary>
+        private static HttpRequest CloneForSse(IHttpRequest src, string lastEventId)
         {
             return new HttpRequest
             {
                 Method = src.Method,
                 Url = src.Url,
-                Headers = BuildHeaders(src.Headers),
+                Headers = BuildHeaders(src.Headers, lastEventId),
                 Body = src.Body,
                 BodyStream = src.BodyStream,
                 BodyLength = src.BodyLength,
@@ -101,10 +103,10 @@ namespace CurlUnity.Sse
         }
 
         private static List<KeyValuePair<string, string>> BuildHeaders(
-            IEnumerable<KeyValuePair<string, string>> userHeaders)
+            IEnumerable<KeyValuePair<string, string>> userHeaders, string lastEventId)
         {
             var list = new List<KeyValuePair<string, string>>();
-            bool hasAccept = false;
+            bool hasAccept = false, hasLastEventId = false;
             if (userHeaders != null)
             {
                 foreach (var kv in userHeaders)
@@ -112,10 +114,14 @@ namespace CurlUnity.Sse
                     list.Add(kv);
                     if (string.Equals(kv.Key, AcceptHeaderName, StringComparison.OrdinalIgnoreCase))
                         hasAccept = true;
+                    else if (string.Equals(kv.Key, LastEventIdHeaderName, StringComparison.OrdinalIgnoreCase))
+                        hasLastEventId = true;
                 }
             }
             if (!hasAccept)
                 list.Add(new KeyValuePair<string, string>(AcceptHeaderName, EventStreamContentType));
+            if (!hasLastEventId && !string.IsNullOrEmpty(lastEventId))
+                list.Add(new KeyValuePair<string, string>(LastEventIdHeaderName, lastEventId));
             return list;
         }
     }

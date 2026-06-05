@@ -104,5 +104,115 @@ namespace CurlUnity.IntegrationTests.Tests
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WithTimeout(task));
         }
+
+        // ============ Layer 2：OpenSse / ISseConnection（重连便利层） ============
+
+        private static async Task WaitUntil(Func<bool> cond, int ms = 5000)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (!cond())
+            {
+                if (sw.ElapsedMilliseconds > ms) throw new TimeoutException("condition not met in time");
+                await Task.Delay(20);
+            }
+        }
+
+        [Fact]
+        public async Task OpenSse_ReconnectsAndContinuesViaLastEventId()
+        {
+            var events = new List<SseEvent>();
+            var options = new SseConnectionOptions { ReconnectDelayInit = TimeSpan.FromMilliseconds(20) };
+            // count=5 全局事件，dropAfter=2 每连接发 2 条就断 → 需 3 次连接，靠 Last-Event-ID 续传
+            using var sse = _client.OpenSse(
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=5&dropAfter=2", TimeoutMs = 0, TcpNoDelay = true },
+                options);
+            sse.OnEvent += e => { lock (events) events.Add(e); };
+
+            await WaitUntil(() => { lock (events) return events.Count >= 5; });
+
+            List<SseEvent> snap;
+            lock (events) snap = events.Take(5).ToList();
+            Assert.Equal(new[] { "msg-0", "msg-1", "msg-2", "msg-3", "msg-4" }, snap.Select(e => e.Data).ToArray());
+            Assert.Equal(new[] { "0", "1", "2", "3", "4" }, snap.Select(e => e.LastEventId).ToArray()); // 续传不重复、id 续上
+        }
+
+        [Fact]
+        public async Task OpenSse_IdleTimeout_Reconnects()
+        {
+            var errors = new List<Exception>();
+            var states = new List<SseConnectionState>();
+            var options = new SseConnectionOptions
+            {
+                IdleTimeout = TimeSpan.FromMilliseconds(200),
+                ReconnectDelayInit = TimeSpan.FromMilliseconds(20),
+            };
+            using var sse = _client.OpenSse(
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse-idle?silentMs=3000", TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true },
+                options);
+            sse.OnError += e => { lock (errors) errors.Add(e); };
+            sse.OnStateChanged += (_, n) => { lock (states) states.Add(n); };
+
+            await WaitUntil(() => { lock (errors) return errors.OfType<TimeoutException>().Any(); });
+            lock (states) Assert.Contains(states, s => s == SseConnectionState.Reconnecting);
+        }
+
+        [Fact]
+        public async Task OpenSse_NonSuccess_RaisesError_AndFactoryReinvoked()
+        {
+            var errors = new List<Exception>();
+            int calls = 0;
+            var options = new SseConnectionOptions { ReconnectDelayInit = TimeSpan.FromMilliseconds(20) };
+            // 用 requestFactory 重载：顺带验证 async headers 钩子每轮(重)连被调用
+            using var sse = _client.OpenSse(
+                _ =>
+                {
+                    Interlocked.Increment(ref calls);
+                    return Task.FromResult<IHttpRequest>(
+                        new HttpRequest { Url = $"{_server.HttpUrl}/sse-503", TimeoutMs = 0 });
+                },
+                options);
+            sse.OnError += e => { lock (errors) errors.Add(e); };
+
+            await WaitUntil(() => { lock (errors) return errors.OfType<SseHttpStatusException>().Any(); });
+            SseHttpStatusException status;
+            lock (errors) status = errors.OfType<SseHttpStatusException>().First();
+            Assert.Equal(503, status.StatusCode);
+            await WaitUntil(() => Volatile.Read(ref calls) >= 2); // 重连 → requestFactory 再次被调
+        }
+
+        [Fact]
+        public async Task OpenSse_Dispose_ClosesCleanly()
+        {
+            var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sse = _client.OpenSse(
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=1000&delayMs=30", TimeoutMs = 0, TcpNoDelay = true },
+                new SseConnectionOptions());
+            sse.OnEvent += _ => first.TrySetResult(true);
+
+            await WithTimeout(first.Task);
+            sse.Dispose();
+            await WaitUntil(() => sse.State == SseConnectionState.Closed, 3000);
+            Assert.Equal(SseConnectionState.Closed, sse.State);
+        }
+
+        [Fact]
+        public async Task OpenSse_Callback_OnBackgroundThread()
+        {
+            int testTid = Thread.CurrentThread.ManagedThreadId;
+            int cbTid = 0;
+            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var sse = _client.OpenSse(
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=1", TimeoutMs = 0 },
+                new SseConnectionOptions());
+            sse.OnEvent += _ =>
+            {
+                Interlocked.CompareExchange(ref cbTid, Thread.CurrentThread.ManagedThreadId, 0);
+                done.TrySetResult(true);
+            };
+
+            await WithTimeout(done.Task);
+            Assert.NotEqual(0, cbTid);
+            Assert.NotEqual(testTid, cbTid);
+        }
     }
 }
