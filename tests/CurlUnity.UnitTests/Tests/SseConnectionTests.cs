@@ -65,7 +65,8 @@ namespace CurlUnity.UnitTests.Tests
                     case Kind.Throw:
                         throw b.Exception;
                     case Kind.Block:
-                        var tcs = new TaskCompletionSource<bool>();
+                        // RunContinuationsAsynchronously：贴合真实 SendAsync（取消后延续不在取消线程同步跑）
+                        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                         using (ct.Register(() => tcs.TrySetResult(true))) await tcs.Task;
                         throw new OperationCanceledException(ct);
                     default:
@@ -284,6 +285,89 @@ namespace CurlUnity.UnitTests.Tests
             using var conn = client.OpenSse(new HttpRequest { Url = "http://x" }, ZeroDelay());
             await WaitUntil(() => client.CallCount >= 1);
             Assert.Equal(SseConnectionState.Connecting, conn.State); // 阻塞中、未收到字节 → 仍 Connecting
+        }
+
+        // ---- Codex Layer 2 评审修复 ----
+
+        [Fact]
+        public async Task Status204_StopsReconnecting()
+        {
+            var errors = new List<Exception>();
+            var (client, release) = Gated(_ => Behavior.Eof(204)); // 始终 204
+            using var conn = new SseConnection(client, Factory(), ZeroDelay(), CancellationToken.None);
+            conn.OnError += e => { lock (errors) errors.Add(e); };
+            release();
+
+            await WaitUntil(() => conn.State == SseConnectionState.Closed);
+            await Task.Delay(50);
+            Assert.Equal(1, client.CallCount);  // 204 = 服务端要求停止 → 不重连
+            lock (errors) Assert.Empty(errors); // 204 不报错
+        }
+
+        [Fact]
+        public async Task Dispose_ClosedCallback_NotFiredSynchronously()
+        {
+            bool closedDuringDispose = false;
+            int inDispose = 0;
+            var (client, release) = Gated(_ => Behavior.Block());
+            using var conn = new SseConnection(client, Factory(), ZeroDelay(), CancellationToken.None);
+            conn.OnStateChanged += (_, n) =>
+            {
+                if (n == SseConnectionState.Closed && Volatile.Read(ref inDispose) == 1) closedDuringDispose = true;
+            };
+            release();
+            await WaitUntil(() => client.CallCount >= 1);
+
+            Volatile.Write(ref inDispose, 1);
+            conn.Dispose();
+            Volatile.Write(ref inDispose, 0);
+
+            await WaitUntil(() => conn.State == SseConnectionState.Closed);
+            Assert.False(closedDuringDispose); // Closed 回调不应在 Dispose 调用线程同步触发（契约：后台线程）
+        }
+
+        [Fact]
+        public void Options_NegativeReconnectDelayInit_Throws()
+        {
+            using var client = new ControllableHttpClient(_ => Behavior.Block());
+            var opts = new SseConnectionOptions { ReconnectDelayInit = TimeSpan.FromMilliseconds(-5) };
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new SseConnection(client, Factory(), opts, CancellationToken.None));
+        }
+
+        [Fact]
+        public void Options_NullIncFn_Throws()
+        {
+            using var client = new ControllableHttpClient(_ => Behavior.Block());
+            var opts = new SseConnectionOptions { ReconnectDelayIncFn = null };
+            Assert.Throws<ArgumentNullException>(
+                () => new SseConnection(client, Factory(), opts, CancellationToken.None));
+        }
+
+        [Fact]
+        public void Options_NonPositiveIdleTimeout_Throws()
+        {
+            using var client = new ControllableHttpClient(_ => Behavior.Block());
+            var opts = new SseConnectionOptions { IdleTimeout = TimeSpan.Zero };
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new SseConnection(client, Factory(), opts, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task Backoff_NotReset_OnNonSuccessWithBody()
+        {
+            var delays = new List<TimeSpan>();
+            var options = new SseConnectionOptions
+            {
+                ReconnectDelayInit = TimeSpan.Zero,
+                ReconnectDelayIncFn = d => { lock (delays) delays.Add(d); return d + TimeSpan.FromMilliseconds(1); },
+            };
+            // 503 带 SSE 格式 body：退避不应因 body 字节被重置（旧实现会在 onByteReceived 里重置）
+            var client = new ControllableHttpClient(idx => idx < 3 ? Behavior.Eof(503, bytes: "data: x\n\n") : Behavior.Block());
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None);
+
+            await WaitUntil(() => client.CallCount >= 4);
+            lock (delays) Assert.Contains(delays, d => d >= TimeSpan.FromMilliseconds(2)); // 退避在累积，未被重置
         }
     }
 }

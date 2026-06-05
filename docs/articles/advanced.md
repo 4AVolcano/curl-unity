@@ -134,7 +134,9 @@ var sse = client.OpenSse(async ct =>
 }, options);
 ```
 
-要点：缺省自动注入 `Last-Event-ID`（取自已确认 id）；非 2xx 经 `OnError` 收到 `SseHttpStatusException`、空闲超时收到 `TimeoutException`、网络错收到 `CurlHttpException`，随后都自动重连；`Dispose()` 取消在飞请求、停止重连、状态置 `Closed`。**回调全在后台线程，调用方自行 marshal 到主线程。**
+要点：缺省自动注入 `Last-Event-ID`（取自已确认 id）；非 2xx 经 `OnError` 收到 `SseHttpStatusException`、空闲超时收到 `TimeoutException`、网络错收到 `CurlHttpException`，随后都自动重连；**`204 No Content` 视为服务端要求停止，直接关闭、不重连**；`Dispose()` 取消在飞请求、停止重连、状态置 `Closed`。**回调全在后台线程，调用方自行 marshal 到主线程。**
+
+> 已知限制：HTTP 状态码要到连接结束才能确认（核心层暂无「响应头就绪」回调），故非 2xx 响应体若恰为 SSE 格式，可能在 `OnError` 前先触发少量 `OnEvent` 并短暂置 `Open`（退避不受影响，仅 2xx 才重置）。真实 SSE 服务器罕见；后续版本将补响应头就绪回调彻底解决。
 
 ### 自定义重连（低层：parser + SendAsync）
 
