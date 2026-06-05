@@ -224,15 +224,24 @@ namespace CurlUnity.IntegrationTests.TestServer
                 return Results.Text(sb.ToString(), "text/plain");
             });
 
-            // SSE: 推 count 条事件后结束连接（handler 返回 → 流关闭 → 客户端收到 EOF）。
-            // delayMs 用于在事件间制造间隔，便于测试取消。
+            // SSE: 推事件后结束连接（handler 返回 → 流关闭 → 客户端收到 EOF）。
+            //   count     —— 全局总事件数（id 0..count-1）
+            //   delayMs   —— 事件间隔（便于测试取消/长连接）
+            //   dropAfter —— 本次连接发够这么多条就断开（模拟掉线，配合 Last-Event-ID 续传）
+            // 读 Last-Event-ID 头实现续传：从 lastId+1 继续。
             app.MapGet("/sse", async (HttpContext ctx) =>
             {
                 ctx.Response.ContentType = "text/event-stream";
                 ctx.Response.Headers["Cache-Control"] = "no-cache";
                 int count = int.TryParse((string)ctx.Request.Query["count"], out var c) ? c : 3;
                 int delayMs = int.TryParse((string)ctx.Request.Query["delayMs"], out var d) ? d : 0;
-                for (int i = 0; i < count; i++)
+                int dropAfter = int.TryParse((string)ctx.Request.Query["dropAfter"], out var da) ? da : int.MaxValue;
+
+                var lastId = ctx.Request.Headers["Last-Event-ID"].ToString();
+                int start = int.TryParse(lastId, out var n) ? n + 1 : 0;
+
+                int sentThisConn = 0;
+                for (int i = start; i < count && sentThisConn < dropAfter; i++, sentThisConn++)
                 {
                     await ctx.Response.WriteAsync($"id: {i}\nevent: tick\ndata: msg-{i}\n\n");
                     await ctx.Response.Body.FlushAsync();
@@ -249,6 +258,19 @@ namespace CurlUnity.IntegrationTests.TestServer
                 await ctx.Response.WriteAsync($"data: {body}\n\n");
                 await ctx.Response.Body.FlushAsync();
             });
+
+            // SSE idle: 先发一条注释（连接已建立的信号），随后静默 silentMs，用于测客户端空闲/心跳超时。
+            app.MapGet("/sse-idle", async (HttpContext ctx) =>
+            {
+                ctx.Response.ContentType = "text/event-stream";
+                int silentMs = int.TryParse((string)ctx.Request.Query["silentMs"], out var s) ? s : 5000;
+                await ctx.Response.WriteAsync(": connected\n\n");
+                await ctx.Response.Body.FlushAsync();
+                await Task.Delay(silentMs, ctx.RequestAborted);
+            });
+
+            // SSE 非 2xx：用于测错误重连。
+            app.MapGet("/sse-503", () => Results.StatusCode(503));
         }
     }
 }

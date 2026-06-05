@@ -129,5 +129,55 @@ namespace CurlUnity.UnitTests.Tests
             using var resp = await client.ReadServerSentEventsAsync(req, _ => { });
             Assert.Equal(204, resp.StatusCode);
         }
+
+        // —— RunOneConnectionAsync 的 lastEventId 注入（供 Layer 2 重连续传用）——
+
+        [Fact]
+        public async Task RunOneConnection_InjectsLastEventId_WhenProvided()
+        {
+            using var client = new CapturingHttpClient();
+            var parser = new SseEventParser();
+            var req = new HttpRequest { Url = "http://x" };
+            await SseCoreExtensions.RunOneConnectionAsync(
+                client, req, parser, _ => { }, onByteReceived: null,
+                CancellationToken.None, lastEventId: "5");
+            Assert.Contains(client.Captured.Headers,
+                kv => kv.Key == "Last-Event-ID" && kv.Value == "5");
+        }
+
+        [Fact]
+        public async Task RunOneConnection_NoLastEventId_WhenNullOrEmpty()
+        {
+            using var client = new CapturingHttpClient();
+            var parser = new SseEventParser();
+            var req = new HttpRequest { Url = "http://x" };
+
+            await SseCoreExtensions.RunOneConnectionAsync(
+                client, req, parser, _ => { }, onByteReceived: null,
+                CancellationToken.None, lastEventId: null);
+            Assert.DoesNotContain(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
+
+            await SseCoreExtensions.RunOneConnectionAsync(
+                client, req, parser, _ => { }, onByteReceived: null,
+                CancellationToken.None, lastEventId: "");
+            Assert.DoesNotContain(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
+        }
+
+        [Fact]
+        public async Task RunOneConnection_DoesNotOverrideUserLastEventId()
+        {
+            using var client = new CapturingHttpClient();
+            var parser = new SseEventParser();
+            var req = new HttpRequest
+            {
+                Url = "http://x",
+                Headers = new[] { new KeyValuePair<string, string>("Last-Event-ID", "user") }
+            };
+            await SseCoreExtensions.RunOneConnectionAsync(
+                client, req, parser, _ => { }, onByteReceived: null,
+                CancellationToken.None, lastEventId: "5");
+            Assert.Single(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
+            Assert.Contains(client.Captured.Headers, kv => kv.Value == "user");
+        }
     }
 }

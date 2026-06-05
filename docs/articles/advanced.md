@@ -65,10 +65,13 @@ using var resp = await client.SendAsync(req);
 
 ## Server-Sent Events (SSE)
 
-SSE (`text/event-stream`) 在 `CurlUnity.Sse` 命名空间，按「协议核心 / 工程策略」分两层：
+SSE (`text/event-stream`) 在 `CurlUnity.Sse` 命名空间，按「协议核心 / 工程便利」分层：
 
-- **`SseEventParser`** — 纯协议解析器，喂字节出事件，零网络依赖，可独立复用。
-- **`ReadServerSentEventsAsync`** — `IHttpClient` 扩展方法，在一个 `IHttpRequest` 上读**一段** SSE 连接，把响应体增量解析成 `SseEvent` 回调出来；连接结束(服务端关流 / 网络错误 / 取消)即返回。
+- **`SseEventParser`** — 纯协议解析器，喂字节出事件，零网络依赖，可独立复用（Layer 0）。
+- **`ReadServerSentEventsAsync`** — `IHttpClient` 扩展方法，在一个 `IHttpRequest` 上读**一段** SSE 连接（连接结束即返回，**不重连**），单连接原语（Layer 1）。
+- **`OpenSse` / `ISseConnection`** — 带**自动重连 / 退避 / 心跳 / 状态机 / Last-Event-ID** 的便利层（Layer 2）。
+
+多数业务直接用 `OpenSse`（见下「自动重连」）即可开箱即用；只需「读一段就结束」时用 `ReadServerSentEventsAsync`；要完全自定义重连策略时用 `SseEventParser` + `SendAsync`。
 
 ```csharp
 using CurlUnity.Http;
@@ -96,9 +99,46 @@ using var resp = await client.ReadServerSentEventsAsync(req, evt =>
 - 支持任意 method + body:SSE 订阅常用 `POST` + JSON 参数,直接用 `HttpRequest.Method` / `Body`。
 - 回调在 **worker 线程**,与 `OnDataReceived` 一致;`request` 上不能再设 `OnDataReceived`(SSE 需接管,已设会 throw)。
 
-### 重连 / Last-Event-ID
+### 自动重连（推荐：OpenSse / ISseConnection）
 
-`ReadServerSentEventsAsync` 是**单连接原语,不重连** —— 重连 / 退避 / 心跳属工程策略,按需自行组合。`SseEventParser` 暴露 `LastEventId` / `RetryMilliseconds`,可据此用 `SendAsync` 实现断线续传(复用同一个 parser 跨连接):
+需要断线自动重连时用 `OpenSse`——内部跑重连循环，叠加指数退避、`Last-Event-ID` 续传、`retry:` 响应、空闲/心跳超时、连接状态机：
+
+```csharp
+var options = new SseConnectionOptions
+{
+    ReconnectDelayInit = TimeSpan.FromSeconds(1),  // 首次重连延迟（连成功后重置）；ReconnectDelayIncFn 默认 t*2 clamp[1s,32s]
+    IdleTimeout = TimeSpan.FromSeconds(20),         // 20s 无任何数据(含注释心跳)→ 判死重连；null=不启用
+};
+
+var req = new HttpRequest { Url = url, TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true };
+var sse = client.OpenSse(req, options);   // 构造即开始连接
+// 请立即挂回调（全在 worker 线程触发，禁止阻塞）
+sse.OnEvent += e => Debug.Log($"[{e.EventType}] {e.Data}");
+sse.OnError += ex => Debug.LogWarning($"sse error: {ex.GetType().Name}（将自动重连）");
+sse.OnStateChanged += (oldS, newS) => Debug.Log($"sse {oldS} → {newS}");
+// ...不再需要时：
+sse.Dispose();   // 关闭并停止重连，状态置 Closed
+```
+
+需要每轮(重)连前刷新 token / 动态构造请求（async headers）时，用 `requestFactory` 重载——库不碰 token：
+
+```csharp
+var sse = client.OpenSse(async ct =>
+{
+    var token = await GetTokenAsync(ct);   // 每轮(重)连前刷新
+    return new HttpRequest
+    {
+        Url = url, Method = HttpMethod.Post, TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true,
+        Headers = new[] { new KeyValuePair<string, string>("Authorization", $"Bearer {token}") },
+    };
+}, options);
+```
+
+要点：缺省自动注入 `Last-Event-ID`（取自已确认 id）；非 2xx 经 `OnError` 收到 `SseHttpStatusException`、空闲超时收到 `TimeoutException`、网络错收到 `CurlHttpException`，随后都自动重连；`Dispose()` 取消在飞请求、停止重连、状态置 `Closed`。**回调全在后台线程，调用方自行 marshal 到主线程。**
+
+### 自定义重连（低层：parser + SendAsync）
+
+若 `OpenSse` 的策略不满足需求，可用 `SseEventParser` + `SendAsync` 完全自定义。`ReadServerSentEventsAsync` 是**单连接原语,不重连**；`SseEventParser` 暴露 `LastEventId` / `RetryMilliseconds`,可据此实现断线续传(复用同一个 parser 跨连接,每轮先 `Reset()`):
 
 ```csharp
 var parser = new SseEventParser();
