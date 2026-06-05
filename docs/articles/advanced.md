@@ -104,6 +104,7 @@ using var resp = await client.ReadServerSentEventsAsync(req, evt =>
 var parser = new SseEventParser();
 while (!ct.IsCancellationRequested)
 {
+    parser.Reset(); // 新连接边界：清上一连接的半行/半事件并重启 BOM 检查（保留已确认的 LastEventId/Retry）
     var headers = new List<KeyValuePair<string, string>>
     {
         new KeyValuePair<string, string>("Accept", "text/event-stream"),

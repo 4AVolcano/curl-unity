@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using CurlUnity.Sse;
@@ -219,6 +220,100 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Equal("x", events[0].Data);
             Assert.Equal("y", events[1].Data);
             Assert.Equal("7", events[1].LastEventId); // Reset 保留 id
+        }
+
+        [Fact]
+        public void IdField_NotConfirmedUntilDispatch()
+        {
+            // 半事件里的 id（无空行）不应推进确认的 LastEventId
+            // （规范：last event ID string 仅在 dispatch 时从 buffer 同步）
+            var parser = new SseEventParser();
+            var bytes = Encoding.UTF8.GetBytes("id: 8\n");
+            parser.Feed(bytes, 0, bytes.Length, _ => { });
+            Assert.Equal("", parser.LastEventId);
+        }
+
+        [Fact]
+        public void IdField_WithoutData_StillConfirmsOnBlankLine()
+        {
+            // 只有 id、无 data 的事件块：dispatch 仍同步 last event id（即使不触发事件）
+            var parser = new SseEventParser();
+            var bytes = Encoding.UTF8.GetBytes("id: 8\n\n");
+            var count = 0;
+            parser.Feed(bytes, 0, bytes.Length, _ => count++);
+            Assert.Equal(0, count);                // 无 data，不 dispatch 事件
+            Assert.Equal("8", parser.LastEventId); // 但确认 id 已更新
+        }
+
+        [Fact]
+        public void IdField_InHalfEvent_DiscardedByReset()
+        {
+            // 半事件含 id，Reset 后应丢弃该 id（回退到上一个已确认值）
+            var parser = new SseEventParser();
+            var events = new List<SseEvent>();
+            var first = Encoding.UTF8.GetBytes("id: 3\ndata: x\n\n"); // 确认 id=3
+            parser.Feed(first, 0, first.Length, events.Add);
+            var half = Encoding.UTF8.GetBytes("id: 8\ndata: dropped"); // 半事件，id=8 未确认
+            parser.Feed(half, 0, half.Length, events.Add);
+            parser.Reset();
+            var next = Encoding.UTF8.GetBytes("data: y\n\n");
+            parser.Feed(next, 0, next.Length, events.Add);
+
+            Assert.Equal(2, events.Count);
+            Assert.Equal("3", events[1].LastEventId); // 回退到 3，而非半事件的 8
+        }
+
+        [Fact]
+        public void RetryField_Overflow_ClampsToIntMax()
+        {
+            var parser = new SseEventParser();
+            var bytes = Encoding.UTF8.GetBytes("retry: 99999999999999\n");
+            parser.Feed(bytes, 0, bytes.Length, _ => { });
+            Assert.Equal(int.MaxValue, parser.RetryMilliseconds);
+        }
+
+        [Theory]
+        [InlineData(-1, 0)]
+        [InlineData(0, -1)]
+        [InlineData(0, 5)]  // offset 0 + count 5 > buffer(3)
+        [InlineData(2, 2)]  // offset 2 + count 2 > buffer(3)
+        public void Feed_InvalidRange_Throws(int offset, int count)
+        {
+            var parser = new SseEventParser();
+            var buf = new byte[3];
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => parser.Feed(buf, offset, count, _ => { }));
+        }
+
+        [Fact]
+        public void LongLineWithoutTerminator_GrowsAndParses()
+        {
+            // 长行触发多次扩容，应正确解析、不丢字节
+            var big = new string('a', 200_000);
+            var e = Assert.Single(Parse("data: " + big + "\n\n"));
+            Assert.Equal(big, e.Data);
+        }
+
+        [Fact]
+        public void Reset_ReenablesBomStripping_ForNewStream()
+        {
+            // Reset 后视作新流：流首 BOM 应再次被剥离，而非泄漏进首行（跨连接复用的必要保证）
+            var parser = new SseEventParser();
+            var events = new List<SseEvent>();
+
+            var s1 = new List<byte> { 0xEF, 0xBB, 0xBF };
+            s1.AddRange(Encoding.UTF8.GetBytes("data: a\n\n"));
+            parser.Feed(s1.ToArray(), 0, s1.Count, events.Add);
+
+            parser.Reset();
+
+            var s2 = new List<byte> { 0xEF, 0xBB, 0xBF };
+            s2.AddRange(Encoding.UTF8.GetBytes("data: b\n\n"));
+            parser.Feed(s2.ToArray(), 0, s2.Count, events.Add);
+
+            Assert.Equal(2, events.Count);
+            Assert.Equal("a", events[0].Data);
+            Assert.Equal("b", events[1].Data); // 第二条流的 BOM 也被剥离
         }
     }
 }
