@@ -32,8 +32,7 @@ namespace CurlUnity.Sse
         /// 与 <see cref="IHttpClient.SendAsync"/> 一致：HTTP 4xx/5xx 不抛，经
         /// <see cref="IHttpResponse.StatusCode"/> 判断；网络/TLS/超时抛 <c>CurlHttpException</c>，
         /// 取消抛 <see cref="OperationCanceledException"/>。SSE 长连接建议在 request 上设
-        /// <see cref="IHttpRequest.TimeoutMs"/>=0、<see cref="IHttpRequest.TcpNoDelay"/>/
-        /// <see cref="IHttpRequest.TcpKeepAlive"/>=true。
+        /// <see cref="IHttpRequest.TimeoutMs"/>=0；本方法内部已为该连接开启 TCP keep-alive。
         /// </para>
         /// </remarks>
         /// <exception cref="InvalidOperationException">
@@ -96,8 +95,7 @@ namespace CurlUnity.Sse
                 EnableResponseHeaders = src.EnableResponseHeaders,
                 EnableCookies = src.EnableCookies,
                 AutoDecompressResponse = src.AutoDecompressResponse,
-                TcpNoDelay = src.TcpNoDelay,
-                TcpKeepAlive = src.TcpKeepAlive,
+                TcpKeepAlive = true, // SSE 长连接默认开 TCP keep-alive（HttpRequest 内部字段）
                 // OnDataReceived 故意不复制：由 SSE 接管（已在 RunOneConnectionAsync 校验未设置）
             };
         }

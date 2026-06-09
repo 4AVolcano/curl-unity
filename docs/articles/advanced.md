@@ -80,9 +80,7 @@ using CurlUnity.Sse;
 var req = new HttpRequest
 {
     Url = "https://example.com/events",
-    TimeoutMs = 0,        // SSE 长连接不设整体超时
-    TcpNoDelay = true,    // 事件不被 Nagle 合并,降低推送延迟
-    TcpKeepAlive = true,  // OS 周期探活,尽早发现死连接
+    TimeoutMs = 0,        // SSE 长连接不设整体超时（Nagle 默认已关；keep-alive 由本方法内部开启）
 };
 
 // onEvent 在 worker 线程触发,禁止阻塞 —— 要碰 Unity API 时自行 marshal 到主线程
@@ -110,7 +108,7 @@ var options = new SseConnectionOptions
     IdleTimeout = TimeSpan.FromSeconds(20),         // 20s 无任何数据(含注释心跳)→ 判死重连；null=不启用
 };
 
-var req = new HttpRequest { Url = url, TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true };
+var req = new HttpRequest { Url = url, TimeoutMs = 0 }; // keep-alive 由 OpenSse 内部为长连接开启
 var sse = client.OpenSse(req, options);   // 构造即开始连接
 // 请立即挂回调（全在 worker 线程触发，禁止阻塞）
 sse.OnEvent += e => Debug.Log($"[{e.EventType}] {e.Data}");
@@ -128,7 +126,7 @@ var sse = client.OpenSse(async ct =>
     var token = await GetTokenAsync(ct);   // 每轮(重)连前刷新
     return new HttpRequest
     {
-        Url = url, Method = HttpMethod.Post, TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true,
+        Url = url, Method = HttpMethod.Post, TimeoutMs = 0,
         Headers = new[] { new KeyValuePair<string, string>("Authorization", $"Bearer {token}") },
     };
 }, options);
@@ -156,7 +154,7 @@ while (!ct.IsCancellationRequested)
 
     var req = new HttpRequest
     {
-        Url = url, TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true,
+        Url = url, TimeoutMs = 0,
         Headers = headers,
         OnDataReceived = (b, o, l) => parser.Feed(b, o, l, OnEvent),
     };

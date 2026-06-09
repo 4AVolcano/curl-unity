@@ -179,5 +179,16 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Single(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
             Assert.Contains(client.Captured.Headers, kv => kv.Value == "user");
         }
+
+        [Fact]
+        public async Task ReadServerSentEvents_EnablesTcpKeepAlive()
+        {
+            // SSE 连接默认开 TCP keep-alive（底层，经 HttpRequest 内部字段，不对外暴露）
+            using var client = new CapturingHttpClient();
+            var req = new HttpRequest { Url = "http://x" };
+            await client.ReadServerSentEventsAsync(req, _ => { });
+            var sent = Assert.IsType<HttpRequest>(client.Captured);
+            Assert.True(sent.TcpKeepAlive);
+        }
     }
 }
