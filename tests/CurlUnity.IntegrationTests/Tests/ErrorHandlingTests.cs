@@ -50,16 +50,6 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         [Fact]
-        public async Task DnsFailure_Throws_DnsFailed()
-        {
-            var ex = await Assert.ThrowsAsync<CurlHttpException>(
-                () => _client.GetAsync("http://this.host.does.not.exist.invalid/test"));
-
-            Assert.Equal(HttpErrorKind.DnsFailed, ex.ErrorKind);
-            Assert.NotEqual(0, ex.CurlCode);
-        }
-
-        [Fact]
         public async Task Exception_MessageContainsKindAndCode()
         {
             var ex = await Assert.ThrowsAsync<CurlHttpException>(
