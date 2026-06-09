@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.IntegrationTests.Fixtures;
 using Xunit;
@@ -19,6 +20,25 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         public void Dispose() { }
+
+        // 轮询诊断快照直到满足 until(或超时)。用于失败计数这类"最终一致"的统计:
+        // 失败路径的 RecordFailure 在 worker 线程执行,与调用方 await 恢复
+        // (tcs 是 RunContinuationsAsynchronously)并发,直接读可能抢在记录之前。
+        // 命中 until 即返回;到超时仍未命中则返回最后一次快照,让断言据实失败
+        // (保留发现"根本没记录"这类真问题的能力)。
+        private static async Task<HttpDiagnosticsSnapshot> WaitForSnapshotAsync(
+            HttpDiagnostics diagnostics,
+            Func<HttpDiagnosticsSnapshot, bool> until,
+            int timeoutMs = 2000)
+        {
+            var snapshot = diagnostics.GetSnapshot();
+            for (int waited = 0; !until(snapshot) && waited < timeoutMs; waited += 10)
+            {
+                await Task.Delay(10);
+                snapshot = diagnostics.GetSnapshot();
+            }
+            return snapshot;
+        }
 
         [Fact]
         public async Task Diagnostics_RecordsTimingData()
@@ -57,7 +77,10 @@ namespace CurlUnity.IntegrationTests.Tests
             await Assert.ThrowsAsync<CurlHttpException>(
                 () => client.GetAsync("http://localhost:1/nope"));
 
-            var snapshot = client.Diagnostics.GetSnapshot();
+            // 失败计数最终一致(见 WaitForSnapshotAsync):轮询到记录落定再断言,
+            // 消除 RecordFailure 与 await 恢复并发导致的偶发漏读。
+            var snapshot = await WaitForSnapshotAsync(
+                client.Diagnostics, s => s.TotalRequests >= 1);
             Assert.Equal(1, snapshot.TotalRequests);
             Assert.Equal(0, snapshot.SuccessRequests);
             Assert.Equal(1, snapshot.FailedRequests);
