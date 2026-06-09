@@ -306,10 +306,9 @@ namespace CurlUnity.Http
             // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
             CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
 
-            // TCP 调优：SSE/低延迟长连接建议开启。默认 false → 不设，沿用 libcurl 缺省。
-            if (request.TcpNoDelay)
-                CheckSetOpt("CURLOPT_TCP_NODELAY", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_NODELAY, 1));
-            if (request.TcpKeepAlive)
+            // TCP keep-alive：SSE 等长连接内部开启（HttpRequest 内部字段，不对外暴露）。
+            // 不处理 Nagle：libcurl 默认 TCP_NODELAY=1（Nagle 已关），无需设置。
+            if (request is HttpRequest hr && hr.TcpKeepAlive)
                 CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
 
             // CURLOPT_VERBOSE = 41 (CURLOPTTYPE_LONG + 41)。诊断用,默认关。

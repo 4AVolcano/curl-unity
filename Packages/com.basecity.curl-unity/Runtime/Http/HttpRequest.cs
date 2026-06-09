@@ -21,8 +21,13 @@ namespace CurlUnity.Http
         public bool EnableResponseHeaders { get; set; }
         public bool EnableCookies { get; set; }
         public bool AutoDecompressResponse { get; set; } = true;
-        public bool TcpNoDelay { get; set; }
-        public bool TcpKeepAlive { get; set; }
         public Action<byte[], int, int> OnDataReceived { get; set; }
+
+        /// <summary>
+        /// 是否启用 TCP keep-alive（<c>CURLOPT_TCP_KEEPALIVE</c>）。内部字段，不在
+        /// <see cref="IHttpRequest"/> 上、不对外暴露；目前仅 SSE 单连接读取（<c>ReadServerSentEventsAsync</c>）
+        /// 内部为长连接默认置 true。
+        /// </summary>
+        internal bool TcpKeepAlive { get; set; }
     }
 }

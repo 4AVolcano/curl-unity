@@ -124,7 +124,7 @@ namespace CurlUnity.IntegrationTests.Tests
             var options = new SseConnectionOptions { ReconnectDelayInit = TimeSpan.FromMilliseconds(20) };
             // count=5 全局事件，dropAfter=2 每连接发 2 条就断 → 需 3 次连接，靠 Last-Event-ID 续传
             using var sse = _client.OpenSse(
-                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=5&dropAfter=2", TimeoutMs = 0, TcpNoDelay = true },
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=5&dropAfter=2", TimeoutMs = 0 },
                 options);
             sse.OnEvent += e => { lock (events) events.Add(e); };
 
@@ -147,7 +147,7 @@ namespace CurlUnity.IntegrationTests.Tests
                 ReconnectDelayInit = TimeSpan.FromMilliseconds(20),
             };
             using var sse = _client.OpenSse(
-                new HttpRequest { Url = $"{_server.HttpUrl}/sse-idle?silentMs=3000", TimeoutMs = 0, TcpNoDelay = true, TcpKeepAlive = true },
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse-idle?silentMs=3000", TimeoutMs = 0 },
                 options);
             sse.OnError += e => { lock (errors) errors.Add(e); };
             sse.OnStateChanged += (_, n) => { lock (states) states.Add(n); };
@@ -185,7 +185,7 @@ namespace CurlUnity.IntegrationTests.Tests
         {
             var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var sse = _client.OpenSse(
-                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=1000&delayMs=30", TimeoutMs = 0, TcpNoDelay = true },
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=1000&delayMs=30", TimeoutMs = 0 },
                 new SseConnectionOptions());
             sse.OnEvent += _ => first.TrySetResult(true);
 

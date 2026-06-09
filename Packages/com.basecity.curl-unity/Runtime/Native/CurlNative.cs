@@ -86,8 +86,8 @@ namespace CurlUnity.Native
         public const int CURLOPT_UPLOAD = 46;
         public const int CURLOPT_INFILESIZE_LARGE = 30115;
 
-        // TCP 调优（SSE/低延迟长连接建议显式开启；普通请求默认不设，沿用 libcurl 缺省）
-        public const int CURLOPT_TCP_NODELAY = 121;
+        // TCP keep-alive（SSE 等长连接内部开启；普通请求不设，沿用 libcurl 默认 0=关）。
+        // 不设 TCP_NODELAY：libcurl 默认即 1（Nagle 已关），无需处理。
         public const int CURLOPT_TCP_KEEPALIVE = 213;
 
         // READFUNCTION sentinel return values

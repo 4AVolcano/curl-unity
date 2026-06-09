@@ -136,22 +136,6 @@ namespace CurlUnity.Http
         bool EnableCookies { get; set; }
 
         /// <summary>
-        /// 是否禁用 Nagle 算法（<c>TCP_NODELAY</c>）。默认 <c>false</c>（沿用 libcurl 缺省）。
-        /// <para>
-        /// SSE 等低延迟长连接建议设 <c>true</c>，避免小事件被 Nagle 合并、增加推送延迟。
-        /// </para>
-        /// </summary>
-        bool TcpNoDelay { get; set; }
-
-        /// <summary>
-        /// 是否启用 TCP keep-alive 探活（<c>TCP_KEEPALIVE</c>）。默认 <c>false</c>。
-        /// <para>
-        /// SSE 等长时间空闲的长连接建议设 <c>true</c>，让 OS 周期性探活、尽早发现死连接。
-        /// </para>
-        /// </summary>
-        bool TcpKeepAlive { get; set; }
-
-        /// <summary>
         /// 流式数据回调（文件下载等场景）。
         /// 设置后响应体不缓冲，数据逐块交付，Response.Body 为 null。
         /// 在后台线程调用。参数: (buffer, offset, length)
