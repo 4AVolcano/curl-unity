@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
 using CurlUnity.Core;
 using CurlUnity.Native;
 
@@ -11,6 +10,10 @@ namespace CurlUnity.Http
     internal class HttpResponse : IHttpResponse
     {
         private readonly ICurlApi _api;
+        // 串行化 getinfo 与 Dispose/finalizer：惰性属性可能在任意线程被读，
+        // 不加锁的话「检查非零 → 并发 cleanup → native 拿到已释放 handle」
+        // 就是 use-after-free。getinfo 是纯内存读，锁开销可忽略。
+        private readonly object _handleLock = new();
         private IntPtr _easyHandle;
         private readonly long _statusCode;
         private readonly byte[] _body;
@@ -62,8 +65,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (!TryGetInfoString(CurlNative.CURLINFO_CONTENT_TYPE, out var ptr)) return null;
-                return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return TryGetInfoString(CurlNative.CURLINFO_CONTENT_TYPE, out var s) ? s : null;
             }
         }
 
@@ -80,8 +82,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (!TryGetInfoString(CurlNative.CURLINFO_EFFECTIVE_URL, out var ptr)) return null;
-                return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return TryGetInfoString(CurlNative.CURLINFO_EFFECTIVE_URL, out var s) ? s : null;
             }
         }
 
@@ -121,9 +122,16 @@ namespace CurlUnity.Http
 
         private void ReleaseHandle(bool fromFinalizer)
         {
-            // Interlocked 保证并发 Dispose / Dispose+finalizer 只有一次真正执行
-            // EasyCleanup，避免 double-free。
-            var handle = Interlocked.Exchange(ref _easyHandle, IntPtr.Zero);
+            // _handleLock 同时保证：
+            //   1) 并发 Dispose / Dispose+finalizer 只有一次真正执行 EasyCleanup
+            //   2) 与 TryGetInfo* 互斥——否则 getinfo 检查通过后 handle 被并发
+            //      cleanup，native 层拿到已释放的 handle 就是 use-after-free
+            IntPtr handle;
+            lock (_handleLock)
+            {
+                handle = _easyHandle;
+                _easyHandle = IntPtr.Zero;
+            }
             if (handle == IntPtr.Zero) return;
 
             if (fromFinalizer)
@@ -139,22 +147,36 @@ namespace CurlUnity.Http
         internal bool TryGetInfoLong(int info, out long value)
         {
             value = 0;
-            if (_easyHandle == IntPtr.Zero) return false;
-            return _api.GetInfoLong(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            lock (_handleLock)
+            {
+                if (_easyHandle == IntPtr.Zero) return false;
+                return _api.GetInfoLong(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            }
         }
 
-        internal bool TryGetInfoString(int info, out IntPtr value)
+        internal bool TryGetInfoString(int info, out string value)
         {
-            value = IntPtr.Zero;
-            if (_easyHandle == IntPtr.Zero) return false;
-            return _api.GetInfoString(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            value = null;
+            // 返回的 char* 归 easy handle 所有，PtrToStringAnsi 必须也在锁内完成，
+            // 否则指针在锁外解引用时 handle 可能已被并发 Dispose 释放。
+            lock (_handleLock)
+            {
+                if (_easyHandle == IntPtr.Zero) return false;
+                if (_api.GetInfoString(_easyHandle, info, out var ptr) != CurlNative.CURLE_OK)
+                    return false;
+                value = ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return true;
+            }
         }
 
         internal bool TryGetInfoOffT(int info, out long value)
         {
             value = 0;
-            if (_easyHandle == IntPtr.Zero) return false;
-            return _api.GetInfoOffT(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            lock (_handleLock)
+            {
+                if (_easyHandle == IntPtr.Zero) return false;
+                return _api.GetInfoOffT(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            }
         }
 
         private static IReadOnlyDictionary<string, string[]> ParseHeaders(byte[] raw)
