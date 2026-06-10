@@ -22,6 +22,14 @@ namespace CurlUnity.Core
     /// </summary>
     internal class CurlMulti : IDisposable
     {
+        // delegate 实例必须静态持有：libcurl 在整个传输期间保存 marshal 出的函数指针，
+        // 方法组直接传参产生的临时 delegate（C# 11 之前编译器不缓存）一旦被 GC，
+        // Mono 下对应 thunk 被释放，libcurl 回调即踩悬挂指针（IL2CPP 不受影响）。
+        // 与 CurlCookieJar 的 s_lockCb/s_unlockCb 同一规范。
+        private static readonly CurlNative.WriteCallback s_writeCb = OnWriteData;
+        private static readonly CurlNative.WriteCallback s_headerCb = OnHeaderData;
+        private static readonly CurlNative.WriteCallback s_readCb = OnReadData;
+
         private readonly ICurlApi _api;
         private IntPtr _multi;
         private int _disposedFlag;
@@ -87,7 +95,7 @@ namespace CurlUnity.Core
 
             // write callback: 流式模式转发到 DataCallback，否则写入 BodyBuffer
             if (!TrySetOpt("CURLOPT_WRITEFUNCTION",
-                    _api.SetOptWriteFunction(request.Handle, OnWriteData), request)) return;
+                    _api.SetOptWriteFunction(request.Handle, s_writeCb), request)) return;
             if (!TrySetOpt("CURLOPT_WRITEDATA",
                     _api.SetOptWriteData(request.Handle, ptr), request)) return;
 
@@ -95,7 +103,7 @@ namespace CurlUnity.Core
             if (request.UploadStream != null)
             {
                 if (!TrySetOpt("CURLOPT_READFUNCTION",
-                        _api.SetOptReadFunction(request.Handle, OnReadData), request)) return;
+                        _api.SetOptReadFunction(request.Handle, s_readCb), request)) return;
                 if (!TrySetOpt("CURLOPT_READDATA",
                         _api.SetOptReadData(request.Handle, ptr), request)) return;
             }
@@ -105,7 +113,7 @@ namespace CurlUnity.Core
             {
                 request.HeaderBuffer = new MemoryStream(2048);
                 if (!TrySetOpt("CURLOPT_HEADERFUNCTION",
-                        _api.SetOptHeaderFunction(request.Handle, OnHeaderData), request)) return;
+                        _api.SetOptHeaderFunction(request.Handle, s_headerCb), request)) return;
                 if (!TrySetOpt("CURLOPT_HEADERDATA",
                         _api.SetOptHeaderData(request.Handle, ptr), request)) return;
             }
