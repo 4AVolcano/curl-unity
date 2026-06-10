@@ -233,6 +233,38 @@ namespace CurlUnity.Core
         }
 
         /// <summary>
+        /// 把所有仍在 multi 中的请求以失败结束。用于驱动线程已不可继续工作
+        /// （worker faulted）时的兜底，保证上层 Task 不会永久悬挂。
+        /// 必须在驱动线程上调用。remove_handle 失败的 easy handle 沿用
+        /// leak-over-crash 策略：保留在 _activeRequests 中等 Dispose 兜底回收。
+        /// </summary>
+        internal void FailAllActive(Exception cause)
+        {
+            if (IsDisposed) return;
+
+            var snapshot = new CurlRequest[_activeRequests.Count];
+            _activeRequests.CopyTo(snapshot);
+            foreach (var request in snapshot)
+            {
+                var rc = _api.MultiRemoveHandle(_multi, request.Handle);
+                if (rc != CurlNative.CURLE_OK)
+                {
+                    CurlLog.Error(
+                        $"FailAllActive: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                        "leaving easy handle attached to multi to avoid use-after-free. Completing request as failed.");
+                    var failResp = new CurlResponse { FailureException = cause };
+                    try { request.OnComplete?.Invoke(failResp); }
+                    catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fail-all: {cbEx}"); }
+                    request.ReleaseBuffers();
+                    continue;
+                }
+
+                _activeRequests.Remove(request);
+                FailComplete(request, cause);
+            }
+        }
+
+        /// <summary>
         /// 把请求以"失败"状态送达 OnComplete，不经过 multi。用于提交前就已失败
         /// 的路径（add_handle 失败、状态不允许提交等）。调用后释放 request 持有的
         /// 资源（easy handle、slist、buffers）。
@@ -311,7 +343,30 @@ namespace CurlUnity.Core
                 return;
             }
 
-            var request = (CurlRequest)GCHandle.FromIntPtr(ptr).Target;
+            // GCHandle 解析加防护：ptr 非零但 handle 已被 Free / 非法时，
+            // FromIntPtr 或 Target 会抛 InvalidOperationException。没有这层防护，
+            // 异常会沿 Tick 一路逃到 worker 线程顶层。处理方式与上面 ptr==Zero
+            // 的防御路径一致：记 error、把 stray handle 从 multi 拔出。
+            CurlRequest request = null;
+            try { request = (CurlRequest)GCHandle.FromIntPtr(ptr).Target; }
+            catch (Exception resolveEx)
+            {
+                CurlLog.Error(
+                    $"ProcessCompletion: failed to resolve CurlRequest from CURLINFO_PRIVATE " +
+                    $"(ptr=0x{ptr.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+            }
+            if (request == null)
+            {
+                var strayRc = _api.MultiRemoveHandle(_multi, easyHandle);
+                if (strayRc != CurlNative.CURLE_OK)
+                {
+                    CurlLog.Error(
+                        $"ProcessCompletion: curl_multi_remove_handle returned {strayRc} " +
+                        $"({_api.GetMultiErrorString(strayRc)}) while removing unresolvable handle from multi. " +
+                        $"Handle may remain attached and leak until multi cleanup or process exit.");
+                }
+                return;
+            }
 
             // Remove FIRST so we can decide safely whether to transfer handle ownership.
             // 如果 MultiRemoveHandle 失败，multi 仍持有此 easy handle，下游再调
