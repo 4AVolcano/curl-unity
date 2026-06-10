@@ -66,6 +66,66 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task SendAsync_DefaultRedirectPolicy_FollowsWithCap30()
+        {
+            var api = new FakeCurlApi();
+            IntPtr captured = IntPtr.Zero;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                {
+                    captured = handle;
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+                }
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var resp = await client
+                .SendAsync(new HttpRequest { Url = "http://example.invalid/" })
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            var state = api.GetEasyHandleState(captured);
+            Assert.Equal(1, state.LongOptions[CurlNative.CURLOPT_FOLLOWLOCATION]);
+            Assert.Equal(30, state.LongOptions[CurlNative.CURLOPT_MAXREDIRS]);
+        }
+
+        [Fact]
+        public async Task SendAsync_FollowRedirectsDisabled_SetsFollowLocationZero()
+        {
+            var api = new FakeCurlApi();
+            IntPtr captured = IntPtr.Zero;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                {
+                    captured = handle;
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+                }
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var resp = await client
+                .SendAsync(new HttpRequest { Url = "http://example.invalid/", FollowRedirects = false })
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            var state = api.GetEasyHandleState(captured);
+            Assert.Equal(0, state.LongOptions[CurlNative.CURLOPT_FOLLOWLOCATION]);
+            Assert.False(state.LongOptions.ContainsKey(CurlNative.CURLOPT_MAXREDIRS));
+        }
+
+        [Fact]
+        public async Task SendAsync_MaxRedirectsBelowMinusOne_FailsFast()
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.SendAsync(
+                new HttpRequest { Url = "http://example.invalid/", MaxRedirects = -2 }));
+        }
+
+        [Fact]
         public async Task SendAsync_EmptyBodyOnGet_IsAllowed()
         {
             // 空 byte[] 不会设置 POSTFIELDS，不触发方法改写，维持向后兼容

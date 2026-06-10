@@ -451,9 +451,24 @@ namespace CurlUnity.Http
                 CheckSetOpt("CURLOPT_TIMEOUT_MS",
                     _api.SetOptLong(h, CurlNative.CURLOPT_TIMEOUT_MS, request.TimeoutMs));
 
-            // Follow redirects
-            CheckSetOpt("CURLOPT_FOLLOWLOCATION",
-                _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
+            // Follow redirects（可按请求关闭；MaxRedirects 防重定向环，超限以
+            // CURLE_TOO_MANY_REDIRECTS 失败）。注意 libcurl 跟随时会把自定义
+            // header（含 Authorization）发给跨主机重定向目标，见 IHttpRequest 文档。
+            if (request.MaxRedirects < -1)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.MaxRedirects), "MaxRedirects 仅允许 >= -1（-1 = 不限制）");
+            if (request.FollowRedirects)
+            {
+                CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
+                CheckSetOpt("CURLOPT_MAXREDIRS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_MAXREDIRS, request.MaxRedirects));
+            }
+            else
+            {
+                CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 0));
+            }
 
             // Cookies：挂到 client 共享 jar 上 + 激活 cookie engine。
             // 注意：这里不能用 CURLOPT_COOKIELIST=""（那是"清空 jar"指令，会擦掉其他

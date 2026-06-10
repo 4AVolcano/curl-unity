@@ -14,6 +14,8 @@ namespace CurlUnity.Http
         public long? BodyLength { get; set; }
         public int ConnectTimeoutMs { get; set; }
         public int TimeoutMs { get; set; }
+        public bool FollowRedirects { get; set; } = true;
+        public int MaxRedirects { get; set; } = 30;
         public bool EnableResponseHeaders { get; set; }
         public bool EnableCookies { get; set; }
         public bool AutoDecompressResponse { get; set; } = true;
