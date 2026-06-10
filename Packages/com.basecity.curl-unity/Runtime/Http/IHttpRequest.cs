@@ -56,11 +56,32 @@ namespace CurlUnity.Http
         /// </summary>
         long? BodyLength { get; set; }
 
-        /// <summary>TCP 建连超时（毫秒），0 = 不限</summary>
+        /// <summary>
+        /// TCP 建连超时（毫秒），0 = 沿用 libcurl 默认（300 秒）。
+        /// <see cref="HttpRequest"/> 默认 30000（30 秒）——移动网络下 300 秒的
+        /// 建连等待等同于挂死。
+        /// </summary>
         int ConnectTimeoutMs { get; set; }
 
-        /// <summary>整个请求响应超时（毫秒），0 = 不限</summary>
+        /// <summary>
+        /// 整个请求响应超时（毫秒），0 = 不限（默认）。长下载等场景不宜设置整体
+        /// 超时；如需检测传输中途僵死的连接（NAT 静默断链、Wi-Fi/蜂窝切换），
+        /// 请配合 <see cref="LowSpeedLimitBytesPerSecond"/> / <see cref="LowSpeedTimeSeconds"/>。
+        /// </summary>
         int TimeoutMs { get; set; }
+
+        /// <summary>
+        /// 低速检测阈值（bytes/s）。与 <see cref="LowSpeedTimeSeconds"/> 成对启用：
+        /// 传输速率低于该值持续指定秒数后，请求以超时失败
+        /// （<c>HttpErrorKind.Timeout</c>）。0（默认）= 不启用。
+        /// 两者必须同时为正或同时为 0，只设其一会在 Send 时抛异常。
+        /// 典型取值：limit=1, time=60 —— 60 秒一个字节都没收/发到才判死，
+        /// 不会误杀慢速但活着的传输。
+        /// </summary>
+        int LowSpeedLimitBytesPerSecond { get; set; }
+
+        /// <summary>低速持续秒数，见 <see cref="LowSpeedLimitBytesPerSecond"/>。0（默认）= 不启用。</summary>
+        int LowSpeedTimeSeconds { get; set; }
 
         /// <summary>
         /// 是否自动跟随 3xx 重定向。默认 <c>true</c>。

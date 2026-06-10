@@ -451,6 +451,24 @@ namespace CurlUnity.Http
                 CheckSetOpt("CURLOPT_TIMEOUT_MS",
                     _api.SetOptLong(h, CurlNative.CURLOPT_TIMEOUT_MS, request.TimeoutMs));
 
+            // 低速检测（成对启用）：速率低于 limit 持续 time 秒 → 以超时失败。
+            // 这是 TimeoutMs=0 的长传输检测"传输中途僵死连接"的唯一手段。
+            var lowLimit = request.LowSpeedLimitBytesPerSecond;
+            var lowTime = request.LowSpeedTimeSeconds;
+            if (lowLimit < 0 || lowTime < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.LowSpeedLimitBytesPerSecond), "低速检测参数不能为负数");
+            if ((lowLimit > 0) != (lowTime > 0))
+                throw new InvalidOperationException(
+                    "LowSpeedLimitBytesPerSecond 与 LowSpeedTimeSeconds 必须成对设置（同时为正或同时为 0）");
+            if (lowLimit > 0)
+            {
+                CheckSetOpt("CURLOPT_LOW_SPEED_LIMIT",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_LOW_SPEED_LIMIT, lowLimit));
+                CheckSetOpt("CURLOPT_LOW_SPEED_TIME",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_LOW_SPEED_TIME, lowTime));
+            }
+
             // Follow redirects（可按请求关闭；MaxRedirects 防重定向环，超限以
             // CURLE_TOO_MANY_REDIRECTS 失败）。注意 libcurl 跟随时会把自定义
             // header（含 Authorization）发给跨主机重定向目标，见 IHttpRequest 文档。
