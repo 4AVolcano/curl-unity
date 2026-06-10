@@ -15,23 +15,37 @@ namespace CurlUnity.Core
     /// </summary>
     internal static class CurlCerts
     {
-        private static string _caCertPath;
-        private static bool _initialized;
+        private static readonly object s_initLock = new();
+        // volatile: _caCertPath 在锁内写、ApplyTo 无锁读，保证安全发布
+        private static volatile string _caCertPath;
+        private static volatile bool _initialized;
 
         /// <summary>当前 CA 证书文件路径。Apple 平台返回 null。</summary>
         public static string CACertPath => _caCertPath;
 
         /// <summary>
-        /// 初始化证书。应在 curl_global_init 之后、首次请求之前调用一次。
+        /// 初始化证书。应在 curl_global_init 之后、首次请求之前调用一次；
+        /// 并发调用安全（多个 client 同时首构时只初始化一次）。
+        /// <para>
+        /// Android 上提取失败时<b>不置位</b>，下一个 client 构造时会重试——
+        /// 否则一次瞬态失败（如在未 attach JNI 的后台线程构造 client）会让
+        /// 整个进程到重启为止都没有 CA、所有 HTTPS 全挂。Android 平台建议在
+        /// 主线程构造首个 client（JNI 访问需要已 attach 的线程）。
+        /// </para>
         /// </summary>
         public static void Initialize()
         {
             if (_initialized) return;
-            _initialized = true;
+            lock (s_initLock)
+            {
+                if (_initialized) return;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-            InitAndroid();
+                if (!TryInitAndroid())
+                    return; // 失败不置位，保留下次重试机会
 #endif
+                _initialized = true;
+            }
         }
 
         /// <summary>
@@ -69,7 +83,8 @@ namespace CurlUnity.Core
         }
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-        private static void InitAndroid()
+        /// <summary>成功（或命中缓存）返回 true；提取失败返回 false，由调用方决定重试。</summary>
+        private static bool TryInitAndroid()
         {
             var pemPath = Path.Combine(Application.persistentDataPath, "curl_cacerts.pem");
             var versionPath = Path.Combine(Application.persistentDataPath, "curl_cacerts.version");
@@ -78,7 +93,7 @@ namespace CurlUnity.Core
             {
                 _caCertPath = pemPath;
                 Debug.Log($"[CurlCerts] 使用缓存证书: {pemPath}");
-                return;
+                return true;
             }
 
             try
@@ -88,10 +103,12 @@ namespace CurlUnity.Core
                 File.WriteAllText(versionPath, GetVersionFingerprint());
                 _caCertPath = pemPath;
                 Debug.Log($"[CurlCerts] 已提取系统证书 -> {pemPath}");
+                return true;
             }
             catch (Exception e)
             {
-                Debug.LogError($"[CurlCerts] 提取系统证书失败: {e}");
+                Debug.LogError($"[CurlCerts] 提取系统证书失败（下一个 client 构造时将重试）: {e}");
+                return false;
             }
         }
 
