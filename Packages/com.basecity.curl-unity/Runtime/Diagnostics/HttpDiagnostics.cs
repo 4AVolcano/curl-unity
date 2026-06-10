@@ -53,19 +53,21 @@ namespace CurlUnity.Diagnostics
         {
             lock (_lock)
             {
-                var total = _totalRequests;
+                // 平均值分母用成功数：_sum* 只在成功路径累加（失败请求没有可靠
+                // timing），除以含失败的 total 会系统性低估平均耗时。
+                var ok = _successRequests;
                 return new HttpDiagnosticsSnapshot(
-                    totalRequests: total,
-                    successRequests: _successRequests,
+                    totalRequests: _totalRequests,
+                    successRequests: ok,
                     failedRequests: _failedRequests,
                     uniqueConnections: _connIds.Count,
                     totalDownloadBytes: _totalDownloadBytes,
                     totalUploadBytes: _totalUploadBytes,
-                    avgDnsTimeUs: total > 0 ? _sumDnsTimeUs / total : 0,
-                    avgConnectTimeUs: total > 0 ? _sumConnectTimeUs / total : 0,
-                    avgTlsTimeUs: total > 0 ? _sumTlsTimeUs / total : 0,
-                    avgFirstByteTimeUs: total > 0 ? _sumFirstByteTimeUs / total : 0,
-                    avgTotalTimeUs: total > 0 ? _sumTotalTimeUs / total : 0
+                    avgDnsTimeUs: ok > 0 ? _sumDnsTimeUs / ok : 0,
+                    avgConnectTimeUs: ok > 0 ? _sumConnectTimeUs / ok : 0,
+                    avgTlsTimeUs: ok > 0 ? _sumTlsTimeUs / ok : 0,
+                    avgFirstByteTimeUs: ok > 0 ? _sumFirstByteTimeUs / ok : 0,
+                    avgTotalTimeUs: ok > 0 ? _sumTotalTimeUs / ok : 0
                 );
             }
         }
@@ -146,7 +148,9 @@ namespace CurlUnity.Diagnostics
             response.TryGetInfoOffT(CurlNative.CURLINFO_SIZE_UPLOAD_T, out var ulBytes);
             response.TryGetInfoOffT(CurlNative.CURLINFO_SPEED_DOWNLOAD_T, out var dlSpeed);
             response.TryGetInfoLong(CurlNative.CURLINFO_NUM_CONNECTS, out var numConnects);
-            response.TryGetInfoOffT(CurlNative.CURLINFO_CONN_ID, out var connId);
+            // CONN_ID 读取失败（老 curl / handle 已 Dispose）时不能把 out 的默认值 0
+            // 当成真实连接 id——会被 _connIds 收为一条假连接，虚高复用率。失败标记 -1。
+            var hasConnId = response.TryGetInfoOffT(CurlNative.CURLINFO_CONN_ID, out var connId);
 
             return new HttpRequestTiming(
                 dnsTimeUs: dns,
@@ -159,7 +163,7 @@ namespace CurlUnity.Diagnostics
                 uploadBytes: ulBytes,
                 downloadSpeedBps: dlSpeed,
                 newConnections: (int)numConnects,
-                connectionId: connId
+                connectionId: hasConnId ? connId : -1
             );
         }
     }

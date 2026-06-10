@@ -56,5 +56,22 @@ namespace CurlUnity.UnitTests.Tests
 
             Assert.Equal(0.7, snap.ConnectionReuseRate, precision: 10);
         }
+
+        /// <summary>
+        /// 失败请求不产生连接，复用率分母必须用成功数：10 总 / 5 成功 / 3 连接
+        /// → 1 - 3/5 = 0.4（用总数会虚高到 0.7）。
+        /// </summary>
+        [Fact]
+        public void ConnectionReuseRate_WithFailures_UsesSuccessDenominator()
+        {
+            var snap = new HttpDiagnosticsSnapshot(
+                totalRequests: 10,
+                successRequests: 5, failedRequests: 5, uniqueConnections: 3,
+                totalDownloadBytes: 0, totalUploadBytes: 0,
+                avgDnsTimeUs: 0, avgConnectTimeUs: 0, avgTlsTimeUs: 0,
+                avgFirstByteTimeUs: 0, avgTotalTimeUs: 0);
+
+            Assert.Equal(0.4, snap.ConnectionReuseRate, precision: 10);
+        }
     }
 }
