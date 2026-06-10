@@ -63,6 +63,45 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task ConcurrentGetInfoAndDispose_NeverTouchesFreedHandle()
+        {
+            IntPtr captured = IntPtr.Zero;
+            var api = NewCompletingApi(h => captured = h);
+            using var client = new CurlHttpClient(api);
+
+            var resp = await client
+                .SendAsync(new HttpRequest { Url = "http://example.invalid/" })
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            // 多线程读惰性属性，同时并发 Dispose——锁保证 getinfo 与 cleanup 互斥，
+            // Dispose 后读属性应拿到安全默认值而不是踩已释放 handle / 抛异常
+            var readers = new Task[4];
+            using var start = new System.Threading.ManualResetEventSlim(false);
+            for (int i = 0; i < readers.Length; i++)
+            {
+                readers[i] = Task.Run(() =>
+                {
+                    start.Wait();
+                    for (int n = 0; n < 1000; n++)
+                    {
+                        _ = resp.ContentType;
+                        _ = resp.ContentLength;
+                        _ = resp.EffectiveUrl;
+                    }
+                });
+            }
+            var disposer = Task.Run(() => { start.Wait(); resp.Dispose(); });
+
+            start.Set();
+            await Task.WhenAll(readers).WaitAsync(TimeSpan.FromSeconds(10));
+            await disposer;
+
+            Assert.True(resp.IsDisposed);
+            Assert.Null(resp.ContentType);
+            Assert.Equal(-1, resp.ContentLength);
+        }
+
+        [Fact]
         public async Task UndisposedResponse_KeepsCurlGlobalAlive_UntilDisposed()
         {
             IntPtr captured = IntPtr.Zero;
