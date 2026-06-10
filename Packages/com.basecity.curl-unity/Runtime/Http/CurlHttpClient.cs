@@ -293,6 +293,8 @@ namespace CurlUnity.Http
                 {
                     var user = proxy.Credentials.UserName ?? string.Empty;
                     var pwd = proxy.Credentials.Password ?? string.Empty;
+                    EnsureNoCrLf(user, "代理用户名");
+                    EnsureNoCrLf(pwd, "代理密码");
                     CheckSetOpt("CURLOPT_PROXYUSERPWD",
                         _api.SetOptString(h, CurlNative.CURLOPT_PROXYUSERPWD, $"{user}:{pwd}"));
                 }
@@ -309,6 +311,7 @@ namespace CurlUnity.Http
             // slist 路径, 会覆盖这个值(libcurl 自身行为)。空/null 跳过, 保留 libcurl 默认。
             if (!string.IsNullOrEmpty(UserAgent))
             {
+                EnsureNoCrLf(UserAgent, "UserAgent");
                 CheckSetOpt("CURLOPT_USERAGENT",
                     _api.SetOptString(h, CurlNative.CURLOPT_USERAGENT, UserAgent));
             }
@@ -415,6 +418,10 @@ namespace CurlUnity.Http
                 var slist = IntPtr.Zero;
                 foreach (var kv in request.Headers)
                 {
+                    // CR/LF 注入防护：值原样进 slist，libcurl 不做过滤。token/凭据等
+                    // 外部来源的 header 值带 \r\n 即可注入任意 header 甚至请求行。
+                    EnsureNoCrLf(kv.Key, $"header name '{kv.Key}'");
+                    EnsureNoCrLf(kv.Value, $"header '{kv.Key}' 的值");
                     var next = _api.SListAppend(slist, $"{kv.Key}: {kv.Value}");
                     if (next == IntPtr.Zero)
                     {
@@ -474,6 +481,16 @@ namespace CurlUnity.Http
             var fresh = new CurlCookieJar(_api);
             if (Interlocked.CompareExchange(ref _cookieJar, fresh, null) != null)
                 fresh.Dispose();
+        }
+
+        /// <summary>
+        /// header 注入防护：拒绝包含 CR/LF 的值进入请求头/凭据等原样写入协议流的
+        /// 位置。与 MultipartFormData.ValidateContentType 同一防线。
+        /// </summary>
+        private static void EnsureNoCrLf(string value, string what)
+        {
+            if (value != null && (value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0))
+                throw new ArgumentException($"{what} 不能包含 CR/LF 字符（header 注入防护）");
         }
 
         private void CheckSetOpt(string optName, int rc)
