@@ -62,6 +62,23 @@ namespace CurlUnity.Http
         /// <summary>整个请求响应超时（毫秒），0 = 不限</summary>
         int TimeoutMs { get; set; }
 
+        /// <summary>
+        /// 是否自动跟随 3xx 重定向。默认 <c>true</c>。
+        /// <para>
+        /// <b>安全提示</b>：libcurl 跟随重定向时会把自定义 header（含
+        /// <c>Authorization</c>）原样发给重定向目标，包括跨主机目标。请求带凭据
+        /// 且目标 URL 不完全可信时，建议置 <c>false</c> 自行处理 3xx。
+        /// </para>
+        /// </summary>
+        bool FollowRedirects { get; set; }
+
+        /// <summary>
+        /// 跟随重定向的最大跳数，仅 <see cref="FollowRedirects"/> 为 <c>true</c> 时生效。
+        /// 默认 30（与 libcurl 8.3+ 默认一致）。0 = 拒绝任何重定向（首跳即失败），
+        /// -1 = 不限制（不推荐）。超限时请求以 <c>CURLE_TOO_MANY_REDIRECTS</c> 失败。
+        /// </summary>
+        int MaxRedirects { get; set; }
+
         /// <summary>是否捕获响应头。默认 false。</summary>
         bool EnableResponseHeaders { get; set; }
 
