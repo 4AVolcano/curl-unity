@@ -32,6 +32,39 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Contains("不允许带 body", ex.Message);
         }
 
+        [Theory]
+        [InlineData("X-Evil\r\nInjected: 1", "v")]                  // name 注入
+        [InlineData("Authorization", "Bearer x\r\nInjected: 1")]    // value 注入（token 来自外部的典型场景）
+        [InlineData("X-A", "v\ninjected")]                          // 裸 LF 同样拒绝
+        public async Task SendAsync_HeaderWithCrLf_FailsFast(string name, string value)
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            var request = new HttpRequest
+            {
+                Url = "http://example.invalid/",
+                Headers = new[] { new System.Collections.Generic.KeyValuePair<string, string>(name, value) },
+            };
+
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(request));
+            Assert.Contains("CR/LF", ex.Message);
+        }
+
+        [Fact]
+        public async Task SendAsync_ProxyCredentialWithCrLf_FailsFast()
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+            client.SetProxy(new HttpProxy("http://proxy.example:8080",
+                new System.Net.NetworkCredential("user", "p\r\nwd")));
+
+            var request = new HttpRequest { Url = "http://example.invalid/" };
+
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(request));
+            Assert.Contains("CR/LF", ex.Message);
+        }
+
         [Fact]
         public async Task SendAsync_EmptyBodyOnGet_IsAllowed()
         {
