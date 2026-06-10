@@ -126,6 +126,68 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task SendAsync_DefaultConnectTimeout_Is30Seconds()
+        {
+            var api = new FakeCurlApi();
+            IntPtr captured = IntPtr.Zero;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                {
+                    captured = handle;
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+                }
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var resp = await client
+                .SendAsync(new HttpRequest { Url = "http://example.invalid/" })
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            var state = api.GetEasyHandleState(captured);
+            Assert.Equal(30_000, state.LongOptions[CurlNative.CURLOPT_CONNECTTIMEOUT_MS]);
+        }
+
+        [Fact]
+        public async Task SendAsync_LowSpeedPair_SetsBothOptions()
+        {
+            var api = new FakeCurlApi();
+            IntPtr captured = IntPtr.Zero;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                {
+                    captured = handle;
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+                }
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var resp = await client.SendAsync(new HttpRequest
+            {
+                Url = "http://example.invalid/",
+                LowSpeedLimitBytesPerSecond = 1,
+                LowSpeedTimeSeconds = 60,
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+
+            var state = api.GetEasyHandleState(captured);
+            Assert.Equal(1, state.LongOptions[CurlNative.CURLOPT_LOW_SPEED_LIMIT]);
+            Assert.Equal(60, state.LongOptions[CurlNative.CURLOPT_LOW_SPEED_TIME]);
+        }
+
+        [Fact]
+        public async Task SendAsync_LowSpeedOnlyOneSet_FailsFast()
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync(
+                new HttpRequest { Url = "http://example.invalid/", LowSpeedTimeSeconds = 60 }));
+        }
+
+        [Fact]
         public async Task SendAsync_EmptyBodyOnGet_IsAllowed()
         {
             // 空 byte[] 不会设置 POSTFIELDS，不触发方法改写，维持向后兼容
