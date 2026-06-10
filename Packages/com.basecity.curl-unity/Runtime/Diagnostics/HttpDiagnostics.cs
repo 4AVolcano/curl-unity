@@ -1,6 +1,6 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using CurlUnity.Http;
 using CurlUnity.Native;
 
@@ -13,17 +13,17 @@ namespace CurlUnity.Diagnostics
     /// 为 null。
     /// </summary>
     /// <remarks>
-    /// 内部用字典保留最近请求的 per-request <see cref="HttpRequestTiming"/>,通过
-    /// <see cref="GetTiming"/> 可查 (前提是调用方还持有对应的 <see cref="IHttpResponse"/>
-    /// 引用)。统计条目会在容量超过阈值时清理已 Dispose 的响应。
+    /// per-request <see cref="HttpRequestTiming"/> 通过 <see cref="GetTiming"/> 可查,
+    /// 前提是调用方还持有对应的 <see cref="IHttpResponse"/> 引用——内部用
+    /// <see cref="ConditionalWeakTable{TKey, TValue}"/> 弱引用关联, 不会钉住
+    /// response 阻碍 GC/finalizer, response 被回收后条目自动消失, 无需清理逻辑。
     /// </remarks>
     public class HttpDiagnostics
     {
-        private const int PruneThreshold = 100;
-
         private readonly object _lock = new();
         private readonly HashSet<long> _connIds = new();
-        private readonly ConcurrentDictionary<IHttpResponse, HttpRequestTiming> _timings = new();
+        // volatile: Reset 用整表替换代替 Clear(), 避免依赖 netstandard2.1 之后才稳定的 API
+        private volatile ConditionalWeakTable<IHttpResponse, StrongBox<HttpRequestTiming>> _timings = new();
         private int _totalRequests;
         private int _successRequests;
         private int _failedRequests;
@@ -41,7 +41,8 @@ namespace CurlUnity.Diagnostics
         /// </summary>
         public HttpRequestTiming GetTiming(IHttpResponse response)
         {
-            return _timings.TryGetValue(response, out var timing) ? timing : default;
+            if (response == null) return default;
+            return _timings.TryGetValue(response, out var box) ? box.Value : default;
         }
 
         /// <summary>
@@ -75,7 +76,7 @@ namespace CurlUnity.Diagnostics
             lock (_lock)
             {
                 _connIds.Clear();
-                _timings.Clear();
+                _timings = new ConditionalWeakTable<IHttpResponse, StrongBox<HttpRequestTiming>>();
                 _totalRequests = 0;
                 _successRequests = 0;
                 _failedRequests = 0;
@@ -96,10 +97,7 @@ namespace CurlUnity.Diagnostics
         internal void Record(HttpResponse response)
         {
             var timing = ReadTiming(response);
-            _timings[response] = timing;
-
-            if (_timings.Count > PruneThreshold)
-                Prune();
+            _timings.AddOrUpdate(response, new StrongBox<HttpRequestTiming>(timing));
 
             lock (_lock)
             {
@@ -130,15 +128,6 @@ namespace CurlUnity.Diagnostics
             {
                 _totalRequests++;
                 _failedRequests++;
-            }
-        }
-
-        private void Prune()
-        {
-            foreach (var kv in _timings)
-            {
-                if (kv.Key.IsDisposed)
-                    _timings.TryRemove(kv.Key, out _);
             }
         }
 
