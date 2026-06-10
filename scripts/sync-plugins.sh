@@ -55,8 +55,11 @@ sync_file "$OUTPUT_DIR/Android/armeabi-v7a/libcurl_unity.so" "$PLUGINS_DIR/Andro
 sync_file "$OUTPUT_DIR/Android/x86_64/libcurl_unity.so" "$PLUGINS_DIR/Android/x86_64/libcurl_unity.so"
 
 # Windows (if exists)
-sync_file "$OUTPUT_DIR/Windows/x64/libcurl_unity.dll" "$PLUGINS_DIR/Windows/x86_64/libcurl_unity.dll" 2>/dev/null || true
-sync_file "$OUTPUT_DIR/Windows/x86/libcurl_unity.dll" "$PLUGINS_DIR/Windows/x86/libcurl_unity.dll" 2>/dev/null || true
+# 源路径必须与 build-windows.bat 的 OUTPUT_ARCH 一致（x86_64 / x86）。
+# 此前这里读 x64/ 且 `|| true` 吞错，本地 Windows 产物永远静默跳过、旧 dll 残留。
+# sync_file 自身对缺失文件已有 [缺失] 提示与计数，无需再抑制。
+sync_file "$OUTPUT_DIR/Windows/x86_64/libcurl_unity.dll" "$PLUGINS_DIR/Windows/x86_64/libcurl_unity.dll"
+sync_file "$OUTPUT_DIR/Windows/x86/libcurl_unity.dll" "$PLUGINS_DIR/Windows/x86/libcurl_unity.dll"
 
 echo ""
 echo "完成: $copied 个文件已同步, $skipped 个缺失跳过"
