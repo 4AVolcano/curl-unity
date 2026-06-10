@@ -340,6 +340,13 @@ namespace CurlUnity.Http
             if (hasStream && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
                 throw new InvalidOperationException(
                     $"HTTP {request.Method} 不允许带 body; BodyStream 需配合 POST/PUT/PATCH 等方法");
+            // byte[] Body 与 BodyStream 同等校验：libcurl 的 COPYPOSTFIELDS 会把请求
+            // 隐式改写成 POST，GET 分支又没有 CUSTOMREQUEST 兜底——不校验的话
+            // "GET + Body" 实际发出的是 POST，属于静默改写行为，必须 fail-fast。
+            if (hasBody && request.Body.Length > 0
+                && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
+                throw new InvalidOperationException(
+                    $"HTTP {request.Method} 不允许带 body; Body 需配合 POST/PUT/PATCH 等方法");
             if (hasStream && request.BodyLength.HasValue && request.BodyLength.Value < 0)
                 throw new ArgumentOutOfRangeException(
                     nameof(request.BodyLength), "BodyLength 不能为负数");
