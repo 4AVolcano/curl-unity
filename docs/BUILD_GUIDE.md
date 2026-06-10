@@ -877,6 +877,7 @@ $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip \
 
 #### 5.4.6 Android 特殊注意事项
 
+- **16KB page size 对齐（必须）**：Android 15+ 设备支持 16KB 内存页，Google Play 自 2025-11 起强制要求所有 native 库兼容。最终 `.so` 链接时必须带 `-Wl,-z,max-page-size=16384`（NDK r28+ 默认开启，老 NDK 必须显式指定），否则 16KB 页设备上 `dlopen` 直接失败导致 App 启动崩溃。`scripts/build.sh` 的 `_collect_android` 已无条件加该参数，并在链接后用 `llvm-readelf -l` 校验所有 LOAD 段 Align ≥ 0x4000，不满足即构建失败。手动编译时可用同样方式自查。
 - **最低 API 等级**：建议 android-24 (Android 7.0)，与 Unity 2022+ 的最低要求对齐。
 - **CA 证书**：Android 没有标准的 CA bundle 文件路径。两种方案：
   - 将 CA bundle（如 `cacert.pem`，可从 <https://curl.se/ca/cacert.pem> 下载）打包到 `StreamingAssets`，运行时通过 `CURLOPT_CAINFO` 设置路径
