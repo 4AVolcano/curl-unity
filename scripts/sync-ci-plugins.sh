@@ -107,8 +107,25 @@ sync_file() {
     copied=$((copied + 1))
 }
 
+# macOS: CI 按架构出 artifact（macos-arm64 / macos-x86_64），这里 lipo 合成
+# universal 再入库——Plugins 的 .meta 声明 OSXUniversal/AnyCPU，若只同步
+# arm64 单架构，Intel Mac（玩家或编辑器）上会 DllNotFoundException。
+MACOS_ARM64="$TEMP_DIR/macos-arm64/libcurl_unity.dylib"
+MACOS_X86_64="$TEMP_DIR/macos-x86_64/libcurl_unity.dylib"
+if [[ -f "$MACOS_ARM64" && -f "$MACOS_X86_64" ]] && command -v lipo &>/dev/null; then
+    lipo -create "$MACOS_ARM64" "$MACOS_X86_64" \
+        -output "$TEMP_DIR/libcurl_unity_universal.dylib"
+    echo "  [lipo] $(lipo -archs "$TEMP_DIR/libcurl_unity_universal.dylib" 2>/dev/null || echo universal)"
+    sync_file "$TEMP_DIR/libcurl_unity_universal.dylib" "$PLUGINS_DIR/macOS/libcurl_unity.dylib"
+elif [[ -f "$MACOS_ARM64" ]]; then
+    echo "  [warn] macos-x86_64 artifact 缺失（或无 lipo），回退同步 arm64 单架构 dylib。"
+    echo "         注意: Plugins meta 声明 OSXUniversal，单架构产物在 Intel Mac 上会加载失败!"
+    sync_file "$MACOS_ARM64" "$PLUGINS_DIR/macOS/libcurl_unity.dylib"
+else
+    echo "  [skip] macOS dylib artifacts not found"
+fi
+
 # Map artifact names to Plugin paths
-sync_file "$TEMP_DIR/macos-arm64/libcurl_unity.dylib"  "$PLUGINS_DIR/macOS/libcurl_unity.dylib"
 sync_file "$TEMP_DIR/ios-arm64/libcurl_unity.a"        "$PLUGINS_DIR/iOS/libcurl_unity.a"
 sync_file "$TEMP_DIR/android-arm64/libcurl_unity.so"   "$PLUGINS_DIR/Android/arm64-v8a/libcurl_unity.so"
 sync_file "$TEMP_DIR/android-armv7/libcurl_unity.so"   "$PLUGINS_DIR/Android/armeabi-v7a/libcurl_unity.so"
