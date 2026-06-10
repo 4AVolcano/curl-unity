@@ -448,13 +448,29 @@ namespace CurlUnity.Core
 
             try
             {
-                var buffer = new byte[totalBytes];
-                Marshal.Copy(ptr, buffer, 0, totalBytes);
-
                 if (request.DataCallback != null)
+                {
+                    // 流式回调契约：每次交付独立数组，用户可安全持有/转投其它线程，
+                    // 不能用池化数组（归还后内容会被复用覆盖）。
+                    var buffer = new byte[totalBytes];
+                    Marshal.Copy(ptr, buffer, 0, totalBytes);
                     request.DataCallback(buffer, 0, totalBytes);
+                }
                 else
-                    request.BodyBuffer.Write(buffer, 0, totalBytes);
+                {
+                    // 缓冲路径：数组只是 native → BodyBuffer 的中转，借 ArrayPool
+                    // 避免下载期间每个 chunk 一次短命分配（与 OnReadData 同一策略）。
+                    var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(totalBytes);
+                    try
+                    {
+                        Marshal.Copy(ptr, rented, 0, totalBytes);
+                        request.BodyBuffer.Write(rented, 0, totalBytes);
+                    }
+                    finally
+                    {
+                        System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+                    }
+                }
             }
             catch (Exception ex)
             {
