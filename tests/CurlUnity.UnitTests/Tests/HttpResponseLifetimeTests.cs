@@ -1,6 +1,8 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
+using CurlUnity.Core;
 using CurlUnity.Http;
 using CurlUnity.Native;
 using CurlUnity.UnitTests.TestSupport;
@@ -30,36 +32,47 @@ namespace CurlUnity.UnitTests.Tests
             return api;
         }
 
-        // NoInlining: 防止 JIT 把 response 局部变量的生命周期延长到调用方栈帧，
-        // 否则 GC.Collect 后对象仍可达，finalizer 不会触发。
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static async Task LeakOneResponse(CurlHttpClient client)
+        // NoInlining/NoOptimization: 让 response 的唯一强引用明确止于本方法。
+        // finalizer 语义本身不依赖完整 async 请求链路；async state machine 和
+        // coverlet 插桩会延长局部变量生命周期，使 GC 时序断言在 CI 下不稳定。
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        private static WeakReference CreateLeakedResponse(FakeCurlApi api, out IntPtr handle)
         {
-            var resp = await client
-                .SendAsync(new HttpRequest { Url = "http://example.invalid/" })
-                .WaitAsync(TimeSpan.FromSeconds(5));
+            handle = api.EasyInit();
+            var resp = new HttpResponse(api, new CurlResponse { EasyHandle = handle });
             Assert.NotNull(resp);
-            // 故意不 Dispose
+            return new WeakReference(resp); // 故意不 Dispose
+        }
+
+        private static bool WaitUntilCleanedUp(FakeCurlApi api, IntPtr handle)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+                if (api.GetEasyHandleState(handle).IsCleanedUp)
+                    return true;
+
+                Thread.Sleep(25);
+            }
+            return false;
         }
 
         [Fact]
-        public async Task Finalizer_ReclaimsLeakedEasyHandle()
+        public void Finalizer_ReclaimsLeakedEasyHandle()
         {
-            IntPtr captured = IntPtr.Zero;
-            var api = NewCompletingApi(h => captured = h);
+            var api = new FakeCurlApi();
+            var weak = CreateLeakedResponse(api, out var captured);
 
-            using (var client = new CurlHttpClient(api))
-            {
-                await LeakOneResponse(client);
+            Assert.NotEqual(IntPtr.Zero, captured);
+            var cleaned = WaitUntilCleanedUp(api, captured);
+            if (!cleaned && weak.Target is IDisposable leaked)
+                leaked.Dispose(); // 失败路径兜底释放 CurlGlobal refcount, 避免污染后续测试
 
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-
-                Assert.NotEqual(IntPtr.Zero, captured);
-                Assert.True(api.GetEasyHandleState(captured).IsCleanedUp,
-                    "未 Dispose 的 HttpResponse 应由 finalizer 兜底回收 easy handle");
-            }
+            Assert.True(cleaned,
+                "未 Dispose 的 HttpResponse 应由 finalizer 兜底回收 easy handle");
         }
 
         [Fact]
@@ -108,17 +121,27 @@ namespace CurlUnity.UnitTests.Tests
             var api = NewCompletingApi(h => captured = h);
 
             var client = new CurlHttpClient(api);
-            var resp = await client
-                .SendAsync(new HttpRequest { Url = "http://example.invalid/" })
-                .WaitAsync(TimeSpan.FromSeconds(5));
+            IHttpResponse resp = null;
+            try
+            {
+                resp = await client
+                    .SendAsync(new HttpRequest { Url = "http://example.invalid/" })
+                    .WaitAsync(TimeSpan.FromSeconds(5));
 
-            client.Dispose();
-            // response 仍活着 → 引用计数 > 0 → 不允许 curl_global_cleanup
-            Assert.Equal(0, api.CurlGlobalCleanupCalls);
+                client.Dispose();
+                // response 仍活着 → 引用计数 > 0 → 不允许 curl_global_cleanup
+                Assert.Equal(0, api.CurlGlobalCleanupCalls);
 
-            resp.Dispose();
-            Assert.Equal(1, api.CurlGlobalCleanupCalls);
-            Assert.True(api.GetEasyHandleState(captured).IsCleanedUp);
+                resp.Dispose();
+                resp = null;
+                Assert.Equal(1, api.CurlGlobalCleanupCalls);
+                Assert.True(api.GetEasyHandleState(captured).IsCleanedUp);
+            }
+            finally
+            {
+                resp?.Dispose();
+                client.Dispose();
+            }
         }
     }
 }
