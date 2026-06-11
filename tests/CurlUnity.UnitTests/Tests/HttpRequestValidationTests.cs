@@ -187,6 +187,40 @@ namespace CurlUnity.UnitTests.Tests
                 new HttpRequest { Url = "http://example.invalid/", LowSpeedTimeSeconds = 60 }));
         }
 
+        // LowSpeed 负数分支（`< 0` 校验，codecov 报告的 partial）
+        [Theory]
+        [InlineData(-1, 0)]   // limit 负数
+        [InlineData(0, -1)]   // time 负数
+        [InlineData(-1, -1)]  // 两者都负
+        public async Task SendAsync_LowSpeedNegative_FailsFast(int limit, int time)
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.SendAsync(
+                new HttpRequest
+                {
+                    Url = "http://example.invalid/",
+                    LowSpeedLimitBytesPerSecond = limit,
+                    LowSpeedTimeSeconds = time,
+                }));
+        }
+
+        // UserAgent CR/LF 注入（EnsureNoCrLf 的另一调用点，补全 partial 覆盖）
+        [Fact]
+        public async Task SendAsync_UserAgentWithCrLf_FailsFast()
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api)
+            {
+                UserAgent = "Evil\r\nInjected: 1",
+            };
+
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(
+                new HttpRequest { Url = "http://example.invalid/" }));
+            Assert.Contains("CR/LF", ex.Message);
+        }
+
         [Fact]
         public async Task SendAsync_EmptyBodyOnGet_IsAllowed()
         {
