@@ -40,3 +40,6 @@ docs/archive/
 # Windows
 Thumbs.db
 Desktop.ini
+
+# Chorus MCP (contains API key)
+.mcp.json

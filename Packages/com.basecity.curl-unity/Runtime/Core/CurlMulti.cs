@@ -22,6 +22,14 @@ namespace CurlUnity.Core
     /// </summary>
     internal class CurlMulti : IDisposable
     {
+        // delegate 实例必须静态持有：libcurl 在整个传输期间保存 marshal 出的函数指针，
+        // 方法组直接传参产生的临时 delegate（C# 11 之前编译器不缓存）一旦被 GC，
+        // Mono 下对应 thunk 被释放，libcurl 回调即踩悬挂指针（IL2CPP 不受影响）。
+        // 与 CurlCookieJar 的 s_lockCb/s_unlockCb 同一规范。
+        private static readonly CurlNative.WriteCallback s_writeCb = OnWriteData;
+        private static readonly CurlNative.WriteCallback s_headerCb = OnHeaderData;
+        private static readonly CurlNative.WriteCallback s_readCb = OnReadData;
+
         private readonly ICurlApi _api;
         private IntPtr _multi;
         private int _disposedFlag;
@@ -87,7 +95,7 @@ namespace CurlUnity.Core
 
             // write callback: 流式模式转发到 DataCallback，否则写入 BodyBuffer
             if (!TrySetOpt("CURLOPT_WRITEFUNCTION",
-                    _api.SetOptWriteFunction(request.Handle, OnWriteData), request)) return;
+                    _api.SetOptWriteFunction(request.Handle, s_writeCb), request)) return;
             if (!TrySetOpt("CURLOPT_WRITEDATA",
                     _api.SetOptWriteData(request.Handle, ptr), request)) return;
 
@@ -95,7 +103,7 @@ namespace CurlUnity.Core
             if (request.UploadStream != null)
             {
                 if (!TrySetOpt("CURLOPT_READFUNCTION",
-                        _api.SetOptReadFunction(request.Handle, OnReadData), request)) return;
+                        _api.SetOptReadFunction(request.Handle, s_readCb), request)) return;
                 if (!TrySetOpt("CURLOPT_READDATA",
                         _api.SetOptReadData(request.Handle, ptr), request)) return;
             }
@@ -105,7 +113,7 @@ namespace CurlUnity.Core
             {
                 request.HeaderBuffer = new MemoryStream(2048);
                 if (!TrySetOpt("CURLOPT_HEADERFUNCTION",
-                        _api.SetOptHeaderFunction(request.Handle, OnHeaderData), request)) return;
+                        _api.SetOptHeaderFunction(request.Handle, s_headerCb), request)) return;
                 if (!TrySetOpt("CURLOPT_HEADERDATA",
                         _api.SetOptHeaderData(request.Handle, ptr), request)) return;
             }
@@ -225,6 +233,38 @@ namespace CurlUnity.Core
         }
 
         /// <summary>
+        /// 把所有仍在 multi 中的请求以失败结束。用于驱动线程已不可继续工作
+        /// （worker faulted）时的兜底，保证上层 Task 不会永久悬挂。
+        /// 必须在驱动线程上调用。remove_handle 失败的 easy handle 沿用
+        /// leak-over-crash 策略：保留在 _activeRequests 中等 Dispose 兜底回收。
+        /// </summary>
+        internal void FailAllActive(Exception cause)
+        {
+            if (IsDisposed) return;
+
+            var snapshot = new CurlRequest[_activeRequests.Count];
+            _activeRequests.CopyTo(snapshot);
+            foreach (var request in snapshot)
+            {
+                var rc = _api.MultiRemoveHandle(_multi, request.Handle);
+                if (rc != CurlNative.CURLE_OK)
+                {
+                    CurlLog.Error(
+                        $"FailAllActive: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                        "leaving easy handle attached to multi to avoid use-after-free. Completing request as failed.");
+                    var failResp = new CurlResponse { FailureException = cause };
+                    try { request.OnComplete?.Invoke(failResp); }
+                    catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fail-all: {cbEx}"); }
+                    request.ReleaseBuffers();
+                    continue;
+                }
+
+                _activeRequests.Remove(request);
+                FailComplete(request, cause);
+            }
+        }
+
+        /// <summary>
         /// 把请求以"失败"状态送达 OnComplete，不经过 multi。用于提交前就已失败
         /// 的路径（add_handle 失败、状态不允许提交等）。调用后释放 request 持有的
         /// 资源（easy handle、slist、buffers）。
@@ -303,7 +343,30 @@ namespace CurlUnity.Core
                 return;
             }
 
-            var request = (CurlRequest)GCHandle.FromIntPtr(ptr).Target;
+            // GCHandle 解析加防护：ptr 非零但 handle 已被 Free / 非法时，
+            // FromIntPtr 或 Target 会抛 InvalidOperationException。没有这层防护，
+            // 异常会沿 Tick 一路逃到 worker 线程顶层。处理方式与上面 ptr==Zero
+            // 的防御路径一致：记 error、把 stray handle 从 multi 拔出。
+            CurlRequest request = null;
+            try { request = (CurlRequest)GCHandle.FromIntPtr(ptr).Target; }
+            catch (Exception resolveEx)
+            {
+                CurlLog.Error(
+                    $"ProcessCompletion: failed to resolve CurlRequest from CURLINFO_PRIVATE " +
+                    $"(ptr=0x{ptr.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+            }
+            if (request == null)
+            {
+                var strayRc = _api.MultiRemoveHandle(_multi, easyHandle);
+                if (strayRc != CurlNative.CURLE_OK)
+                {
+                    CurlLog.Error(
+                        $"ProcessCompletion: curl_multi_remove_handle returned {strayRc} " +
+                        $"({_api.GetMultiErrorString(strayRc)}) while removing unresolvable handle from multi. " +
+                        $"Handle may remain attached and leak until multi cleanup or process exit.");
+                }
+                return;
+            }
 
             // Remove FIRST so we can decide safely whether to transfer handle ownership.
             // 如果 MultiRemoveHandle 失败，multi 仍持有此 easy handle，下游再调
@@ -385,13 +448,29 @@ namespace CurlUnity.Core
 
             try
             {
-                var buffer = new byte[totalBytes];
-                Marshal.Copy(ptr, buffer, 0, totalBytes);
-
                 if (request.DataCallback != null)
+                {
+                    // 流式回调契约：每次交付独立数组，用户可安全持有/转投其它线程，
+                    // 不能用池化数组（归还后内容会被复用覆盖）。
+                    var buffer = new byte[totalBytes];
+                    Marshal.Copy(ptr, buffer, 0, totalBytes);
                     request.DataCallback(buffer, 0, totalBytes);
+                }
                 else
-                    request.BodyBuffer.Write(buffer, 0, totalBytes);
+                {
+                    // 缓冲路径：数组只是 native → BodyBuffer 的中转，借 ArrayPool
+                    // 避免下载期间每个 chunk 一次短命分配（与 OnReadData 同一策略）。
+                    var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(totalBytes);
+                    try
+                    {
+                        Marshal.Copy(ptr, rented, 0, totalBytes);
+                        request.BodyBuffer.Write(rented, 0, totalBytes);
+                    }
+                    finally
+                    {
+                        System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+                    }
+                }
             }
             catch (Exception ex)
             {

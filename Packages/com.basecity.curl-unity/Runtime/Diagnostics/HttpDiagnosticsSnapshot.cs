@@ -19,7 +19,10 @@ namespace CurlUnity.Diagnostics
         public readonly int FailedRequests;
         /// <summary>出现过的不同 libcurl 连接 ID 数量。越小说明连接复用越好。</summary>
         public readonly int UniqueConnections;
-        /// <summary>连接复用率 = 1 - UniqueConnections / TotalRequests。无请求时为 0。</summary>
+        /// <summary>
+        /// 连接复用率 = 1 - UniqueConnections / SuccessRequests。无成功请求时为 0。
+        /// 分母用成功数而非总数：失败的请求不产生连接，计入分母会虚高复用率。
+        /// </summary>
         public readonly double ConnectionReuseRate;
         /// <summary>累计下载字节数。</summary>
         public readonly long TotalDownloadBytes;
@@ -45,8 +48,8 @@ namespace CurlUnity.Diagnostics
             SuccessRequests = successRequests;
             FailedRequests = failedRequests;
             UniqueConnections = uniqueConnections;
-            ConnectionReuseRate = totalRequests > 0 && uniqueConnections > 0
-                ? 1.0 - (double)uniqueConnections / totalRequests
+            ConnectionReuseRate = successRequests > 0 && uniqueConnections > 0
+                ? 1.0 - (double)uniqueConnections / successRequests
                 : 0;
             TotalDownloadBytes = totalDownloadBytes;
             TotalUploadBytes = totalUploadBytes;

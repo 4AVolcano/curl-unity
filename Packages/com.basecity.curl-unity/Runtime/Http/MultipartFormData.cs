@@ -31,7 +31,9 @@ namespace CurlUnity.Http
     /// <b>冻结语义</b>:首次调用 <see cref="Build"/> 或 <see cref="BuildStream"/> 后,
     /// form 进入 frozen 状态,再调 <see cref="AddText"/>/<see cref="AddFile(string, string, byte[], string)"/>/
     /// <see cref="AddFile(string, string, System.IO.Stream, long, string)"/> 抛 <see cref="InvalidOperationException"/>。
-    /// Build/BuildStream 本身可重复调用(产出一致)。
+    /// <see cref="Build"/> 可重复调用(产出一致)；含 Stream part 的 form 的
+    /// <see cref="BuildStream"/> 只能调用一次——Stream part 的源 Stream 在首次
+    /// 消费时即耗尽,重复调用抛 <see cref="InvalidOperationException"/>。
     /// </para>
     /// </remarks>
     public sealed class MultipartFormData
@@ -51,6 +53,7 @@ namespace CurlUnity.Http
         // 首次 Build/BuildStream 后置 true,后续 Add* 拒绝;避免 form 在序列化进行
         // 中被改动导致 ContentLength 与实际产出不一致。
         private bool _frozen;
+        private bool _streamBuilt; // 含 Stream part 时 BuildStream 仅允许一次
 
         public MultipartFormData()
         {
@@ -183,11 +186,18 @@ namespace CurlUnity.Http
         /// </summary>
         /// <remarks>
         /// 调用后 form 进入 frozen 状态,后续 <c>AddText</c>/<c>AddFile</c> 抛
-        /// <see cref="InvalidOperationException"/>;同一 form 可重复调用 BuildStream
-        /// 产出独立的 stream 对象。
+        /// <see cref="InvalidOperationException"/>。含 Stream part 时只能调用一次:
+        /// 两次返回的 stream 共享同一组源 Stream,第一次读完后源已耗尽,第二次
+        /// 消费必然在中途提前 EOF(表现为难排查的 IOException)——直接在入口
+        /// fail-fast。纯内存 part 的 form 可重复调用(byte[] 可重复读)。
         /// </remarks>
         public Stream BuildStream()
         {
+            if (HasStreamParts && _streamBuilt)
+                throw new InvalidOperationException(
+                    "含 Stream part 的 form 只能 BuildStream 一次: 源 Stream 在首次消费时已耗尽, " +
+                    "重复构建的 stream 读取时会提前 EOF。如需重发请用新的源 Stream 重建 form。");
+            _streamBuilt = true;
             _frozen = true;
             return new MultipartStream(_parts, _dashBoundary, _closeBoundary);
         }

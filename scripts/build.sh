@@ -595,12 +595,31 @@ _collect_android() {
   local clang="$toolchain_bin/${target}${ANDROID_MIN_API}-clang"
 
   # bridge.c + 所有静态库 → 单个 .so
+  # -Wl,-z,max-page-size=16384: Android 15+ 的 16KB page size 设备要求 ELF
+  # LOAD 段按 16KB 对齐，否则 dlopen 直接失败（Google Play 2025-11 起强制）。
+  # NDK r28+ 默认 16KB，老 NDK 必须显式指定；这里无条件加上，不依赖 NDK 版本。
   "$clang" -shared -o "$out/libcurl_unity.so" \
     -I"$PREFIX/include" \
     "$BRIDGE_SRC" \
+    -Wl,-z,max-page-size=16384 \
     -Wl,--whole-archive "$PREFIX/lib/libcurl.a" -Wl,--no-whole-archive \
     $(_all_static_libs | sed "s|$PREFIX/lib/libcurl.a||") \
     -lz
+
+  # 校验 16KB 对齐：所有 LOAD 段 Align 必须 >= 0x4000。链接参数被工具链升级
+  # 或脚本改动弄丢时在这里硬失败，而不是把 4KB 对齐的 .so 静默带上线。
+  local readelf_bin="$toolchain_bin/llvm-readelf"
+  if [[ -x "$readelf_bin" ]]; then
+    local align
+    while read -r align; do
+      # Align 列形如 0x1000/0x4000，bash 算术原生支持 0x 前缀
+      if (( align < 16384 )); then
+        echo "错误: libcurl_unity.so 存在 LOAD 段对齐 $align < 16KB，不满足 Android 16KB page size 要求" >&2
+        exit 1
+      fi
+    done < <("$readelf_bin" -l "$out/libcurl_unity.so" | awk '$1 == "LOAD" { print $NF }')
+    echo "  (LOAD 段 16KB 对齐校验通过)"
+  fi
 
   # strip
   local strip_bin="$toolchain_bin/llvm-strip"

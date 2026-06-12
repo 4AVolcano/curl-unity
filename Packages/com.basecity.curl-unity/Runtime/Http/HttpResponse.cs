@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
 using CurlUnity.Core;
 using CurlUnity.Native;
 
@@ -11,6 +10,10 @@ namespace CurlUnity.Http
     internal class HttpResponse : IHttpResponse
     {
         private readonly ICurlApi _api;
+        // 串行化 getinfo 与 Dispose/finalizer：惰性属性可能在任意线程被读，
+        // 不加锁的话「检查非零 → 并发 cleanup → native 拿到已释放 handle」
+        // 就是 use-after-free。getinfo 是纯内存读，锁开销可忽略。
+        private readonly object _handleLock = new();
         private IntPtr _easyHandle;
         private readonly long _statusCode;
         private readonly byte[] _body;
@@ -29,6 +32,15 @@ namespace CurlUnity.Http
             _statusCode = raw.StatusCode;
             _body = raw.Body;
             _rawHeaders = raw.RawHeaders;
+
+            // 持有 native easy handle 期间引用计数压住 curl_global_cleanup：
+            // 调用方漏 Dispose 时 finalizer 才能安全地调 curl_easy_cleanup
+            // （否则 client 全部 Dispose 后 global cleanup 先行，finalizer 再
+            // cleanup 就是对已卸载库状态的 UAF）。
+            if (_easyHandle != IntPtr.Zero)
+                CurlGlobal.Acquire(_api);
+            else
+                GC.SuppressFinalize(this);
         }
 
         internal IntPtr EasyHandle => _easyHandle;
@@ -53,8 +65,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (!TryGetInfoString(CurlNative.CURLINFO_CONTENT_TYPE, out var ptr)) return null;
-                return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return TryGetInfoString(CurlNative.CURLINFO_CONTENT_TYPE, out var s) ? s : null;
             }
         }
 
@@ -71,8 +82,7 @@ namespace CurlUnity.Http
         {
             get
             {
-                if (!TryGetInfoString(CurlNative.CURLINFO_EFFECTIVE_URL, out var ptr)) return null;
-                return ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return TryGetInfoString(CurlNative.CURLINFO_EFFECTIVE_URL, out var s) ? s : null;
             }
         }
 
@@ -96,32 +106,77 @@ namespace CurlUnity.Http
 
         public void Dispose()
         {
-            // Interlocked 保证并发 Dispose 只有一次真正执行 EasyCleanup，
-            // 避免 double-free。
-            var handle = Interlocked.Exchange(ref _easyHandle, IntPtr.Zero);
-            if (handle != IntPtr.Zero)
-                _api.EasyCleanup(handle);
+            ReleaseHandle(fromFinalizer: false);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// 泄漏安全网：调用方漏 Dispose 时由 GC 兜底回收 native easy handle，
+        /// 记一条 warning 帮助定位泄漏点。正确用法仍是显式 Dispose/using——
+        /// finalizer 触发时机不可控，期间 handle 及其缓冲一直占着 native 内存。
+        /// </summary>
+        ~HttpResponse()
+        {
+            ReleaseHandle(fromFinalizer: true);
+        }
+
+        private void ReleaseHandle(bool fromFinalizer)
+        {
+            // _handleLock 同时保证：
+            //   1) 并发 Dispose / Dispose+finalizer 只有一次真正执行 EasyCleanup
+            //   2) 与 TryGetInfo* 互斥——否则 getinfo 检查通过后 handle 被并发
+            //      cleanup，native 层拿到已释放的 handle 就是 use-after-free
+            IntPtr handle;
+            lock (_handleLock)
+            {
+                handle = _easyHandle;
+                _easyHandle = IntPtr.Zero;
+            }
+            if (handle == IntPtr.Zero) return;
+
+            if (fromFinalizer)
+                CurlLog.Warn(
+                    "HttpResponse was garbage-collected without Dispose(); " +
+                    "the native easy handle was reclaimed by the finalizer. " +
+                    "Dispose responses explicitly (e.g. with `using`) to avoid native memory pressure.");
+
+            _api.EasyCleanup(handle);
+            CurlGlobal.Release(_api);
         }
 
         internal bool TryGetInfoLong(int info, out long value)
         {
             value = 0;
-            if (_easyHandle == IntPtr.Zero) return false;
-            return _api.GetInfoLong(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            lock (_handleLock)
+            {
+                if (_easyHandle == IntPtr.Zero) return false;
+                return _api.GetInfoLong(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            }
         }
 
-        internal bool TryGetInfoString(int info, out IntPtr value)
+        internal bool TryGetInfoString(int info, out string value)
         {
-            value = IntPtr.Zero;
-            if (_easyHandle == IntPtr.Zero) return false;
-            return _api.GetInfoString(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            value = null;
+            // 返回的 char* 归 easy handle 所有，PtrToStringAnsi 必须也在锁内完成，
+            // 否则指针在锁外解引用时 handle 可能已被并发 Dispose 释放。
+            lock (_handleLock)
+            {
+                if (_easyHandle == IntPtr.Zero) return false;
+                if (_api.GetInfoString(_easyHandle, info, out var ptr) != CurlNative.CURLE_OK)
+                    return false;
+                value = ptr != IntPtr.Zero ? Marshal.PtrToStringAnsi(ptr) : null;
+                return true;
+            }
         }
 
         internal bool TryGetInfoOffT(int info, out long value)
         {
             value = 0;
-            if (_easyHandle == IntPtr.Zero) return false;
-            return _api.GetInfoOffT(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            lock (_handleLock)
+            {
+                if (_easyHandle == IntPtr.Zero) return false;
+                return _api.GetInfoOffT(_easyHandle, info, out value) == CurlNative.CURLE_OK;
+            }
         }
 
         private static IReadOnlyDictionary<string, string[]> ParseHeaders(byte[] raw)

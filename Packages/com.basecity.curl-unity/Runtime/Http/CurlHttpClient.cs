@@ -293,6 +293,8 @@ namespace CurlUnity.Http
                 {
                     var user = proxy.Credentials.UserName ?? string.Empty;
                     var pwd = proxy.Credentials.Password ?? string.Empty;
+                    EnsureNoCrLf(user, "代理用户名");
+                    EnsureNoCrLf(pwd, "代理密码");
                     CheckSetOpt("CURLOPT_PROXYUSERPWD",
                         _api.SetOptString(h, CurlNative.CURLOPT_PROXYUSERPWD, $"{user}:{pwd}"));
                 }
@@ -309,6 +311,7 @@ namespace CurlUnity.Http
             // slist 路径, 会覆盖这个值(libcurl 自身行为)。空/null 跳过, 保留 libcurl 默认。
             if (!string.IsNullOrEmpty(UserAgent))
             {
+                EnsureNoCrLf(UserAgent, "UserAgent");
                 CheckSetOpt("CURLOPT_USERAGENT",
                     _api.SetOptString(h, CurlNative.CURLOPT_USERAGENT, UserAgent));
             }
@@ -340,6 +343,13 @@ namespace CurlUnity.Http
             if (hasStream && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
                 throw new InvalidOperationException(
                     $"HTTP {request.Method} 不允许带 body; BodyStream 需配合 POST/PUT/PATCH 等方法");
+            // byte[] Body 与 BodyStream 同等校验：libcurl 的 COPYPOSTFIELDS 会把请求
+            // 隐式改写成 POST，GET 分支又没有 CUSTOMREQUEST 兜底——不校验的话
+            // "GET + Body" 实际发出的是 POST，属于静默改写行为，必须 fail-fast。
+            if (hasBody && request.Body.Length > 0
+                && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
+                throw new InvalidOperationException(
+                    $"HTTP {request.Method} 不允许带 body; Body 需配合 POST/PUT/PATCH 等方法");
             if (hasStream && request.BodyLength.HasValue && request.BodyLength.Value < 0)
                 throw new ArgumentOutOfRangeException(
                     nameof(request.BodyLength), "BodyLength 不能为负数");
@@ -408,6 +418,10 @@ namespace CurlUnity.Http
                 var slist = IntPtr.Zero;
                 foreach (var kv in request.Headers)
                 {
+                    // CR/LF 注入防护：值原样进 slist，libcurl 不做过滤。token/凭据等
+                    // 外部来源的 header 值带 \r\n 即可注入任意 header 甚至请求行。
+                    EnsureNoCrLf(kv.Key, $"header name '{kv.Key}'");
+                    EnsureNoCrLf(kv.Value, $"header '{kv.Key}' 的值");
                     var next = _api.SListAppend(slist, $"{kv.Key}: {kv.Value}");
                     if (next == IntPtr.Zero)
                     {
@@ -437,9 +451,42 @@ namespace CurlUnity.Http
                 CheckSetOpt("CURLOPT_TIMEOUT_MS",
                     _api.SetOptLong(h, CurlNative.CURLOPT_TIMEOUT_MS, request.TimeoutMs));
 
-            // Follow redirects
-            CheckSetOpt("CURLOPT_FOLLOWLOCATION",
-                _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
+            // 低速检测（成对启用）：速率低于 limit 持续 time 秒 → 以超时失败。
+            // 这是 TimeoutMs=0 的长传输检测"传输中途僵死连接"的唯一手段。
+            var lowLimit = request.LowSpeedLimitBytesPerSecond;
+            var lowTime = request.LowSpeedTimeSeconds;
+            if (lowLimit < 0 || lowTime < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.LowSpeedLimitBytesPerSecond), "低速检测参数不能为负数");
+            if ((lowLimit > 0) != (lowTime > 0))
+                throw new InvalidOperationException(
+                    "LowSpeedLimitBytesPerSecond 与 LowSpeedTimeSeconds 必须成对设置（同时为正或同时为 0）");
+            if (lowLimit > 0)
+            {
+                CheckSetOpt("CURLOPT_LOW_SPEED_LIMIT",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_LOW_SPEED_LIMIT, lowLimit));
+                CheckSetOpt("CURLOPT_LOW_SPEED_TIME",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_LOW_SPEED_TIME, lowTime));
+            }
+
+            // Follow redirects（可按请求关闭；MaxRedirects 防重定向环，超限以
+            // CURLE_TOO_MANY_REDIRECTS 失败）。注意 libcurl 跟随时会把自定义
+            // header（含 Authorization）发给跨主机重定向目标，见 IHttpRequest 文档。
+            if (request.MaxRedirects < -1)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.MaxRedirects), "MaxRedirects 仅允许 >= -1（-1 = 不限制）");
+            if (request.FollowRedirects)
+            {
+                CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
+                CheckSetOpt("CURLOPT_MAXREDIRS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_MAXREDIRS, request.MaxRedirects));
+            }
+            else
+            {
+                CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 0));
+            }
 
             // Cookies：挂到 client 共享 jar 上 + 激活 cookie engine。
             // 注意：这里不能用 CURLOPT_COOKIELIST=""（那是"清空 jar"指令，会擦掉其他
@@ -467,6 +514,16 @@ namespace CurlUnity.Http
             var fresh = new CurlCookieJar(_api);
             if (Interlocked.CompareExchange(ref _cookieJar, fresh, null) != null)
                 fresh.Dispose();
+        }
+
+        /// <summary>
+        /// header 注入防护：拒绝包含 CR/LF 的值进入请求头/凭据等原样写入协议流的
+        /// 位置。与 MultipartFormData.ValidateContentType 同一防线。
+        /// </summary>
+        private static void EnsureNoCrLf(string value, string what)
+        {
+            if (value != null && (value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0))
+                throw new ArgumentException($"{what} 不能包含 CR/LF 字符（header 注入防护）");
         }
 
         private void CheckSetOpt(string optName, int rc)
