@@ -131,6 +131,7 @@ namespace CurlUnity.Http
                     earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode, rawHeaders);
                     userHeadersCb(earlyResponse);
                 };
+                curlReq.OnHandleFreed = () => earlyResponse?.InvalidateHandle();
             }
 
             // CancellationToken → 取消请求（提交到后台线程执行 remove_handle）
@@ -163,24 +164,23 @@ namespace CurlUnity.Http
                     // Pipeline 未到 libcurl 就失败的路径(add_handle 失败、非法状态提交、
                     // remove_handle 失败等),FailureException 已经是 CurlHttpException 或
                     // OperationCanceledException,直接透传。
+                    // earlyResponse 使用 deferred ownership：传输完成前不拥有 cleanup 权。
+                    // 错误/取消路径下 handle 由请求侧释放，这里只需 invalidate 避免 getinfo UAF。
+
                     if (curlResp.FailureException != null)
                     {
-                        // earlyResponse 持有 handle；FailureException + EasyHandle==Zero
-                        // 意味着 MultiRemoveHandle 失败 → handle 仍在 multi 中 → 不能 EasyCleanup
-                        earlyResponse?.ReleaseWithoutCleanup();
+                        // FailureException + EasyHandle==Zero: MultiRemoveHandle 失败，
+                        // handle 仍在 multi 中，不做 EasyCleanup。
+                        earlyResponse?.InvalidateHandle();
                         if (tcs.TrySetException(curlResp.FailureException))
                             Diagnostics?.RecordFailure();
                         return;
                     }
 
-                    // 用户回调异常优先于 libcurl 返回码: Stream.Read / DataCallback 抛异常
-                    // 会让 libcurl 以 CURLE_ABORTED_BY_CALLBACK / CURLE_WRITE_ERROR 结束,
-                    // 但根因是用户代码,应 rethrow 原异常(保留栈),不包装 CurlHttpException。
                     if (curlReq.UploadError != null)
                     {
-                        if (earlyResponse != null)
-                            earlyResponse.Dispose();
-                        else if (curlResp.EasyHandle != IntPtr.Zero)
+                        earlyResponse?.InvalidateHandle();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.UploadError))
                             Diagnostics?.RecordFailure();
@@ -188,21 +188,18 @@ namespace CurlUnity.Http
                     }
                     if (curlReq.DownloadError != null)
                     {
-                        if (earlyResponse != null)
-                            earlyResponse.Dispose();
-                        else if (curlResp.EasyHandle != IntPtr.Zero)
+                        earlyResponse?.InvalidateHandle();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.DownloadError))
                             Diagnostics?.RecordFailure();
                         return;
                     }
 
-                    // libcurl 报错 → CurlHttpException,释放 handle,不给调用方 response。
                     if (curlResp.CurlCode != CurlNative.CURLE_OK)
                     {
-                        if (earlyResponse != null)
-                            earlyResponse.Dispose();
-                        else if (curlResp.EasyHandle != IntPtr.Zero)
+                        earlyResponse?.InvalidateHandle();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(CurlHttpException.FromEasyCode(
                             curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode))))

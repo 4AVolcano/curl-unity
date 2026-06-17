@@ -58,6 +58,10 @@ namespace CurlUnity.Core
         internal Action<long, byte[]> HeadersReceivedCallback;
         internal bool HeadersReceivedFired;
 
+        // 取消路径释放 handle 前通知上层（CurlHttpClient 闭包）失效 earlyResponse，
+        // 避免 earlyResponse 的 finalizer 对已释放 handle 做 getinfo / double-free。
+        internal Action OnHandleFreed;
+
         private int _state = (int)CurlRequestState.Created;
         private bool _handleTransferred;
 
@@ -131,7 +135,10 @@ namespace CurlUnity.Core
             }
 
             if (!_handleTransferred && Handle != IntPtr.Zero)
+            {
+                OnHandleFreed?.Invoke();
                 Api.EasyCleanup(Handle);
+            }
 
             BodyBuffer.Dispose();
             HeaderBuffer?.Dispose();

@@ -134,19 +134,21 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
-        public async Task CloneForSse_DoesNotCopyUserOnHeadersReceived()
+        public async Task ThrowsIfRequestAlreadyHasOnHeadersReceived()
         {
             using var client = new CapturingHttpClient();
-            Action<IHttpResponse> userCb = _ => { };
-            var req = new HttpRequest
-            {
-                Url = "http://x",
-                OnHeadersReceived = userCb
-            };
+            var req = new HttpRequest { Url = "http://x", OnHeadersReceived = _ => { } };
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => client.ReadServerSentEventsAsync(req, _ => { }));
+        }
+
+        [Fact]
+        public async Task SseSetsOwnOnHeadersReceived()
+        {
+            using var client = new CapturingHttpClient();
+            var req = new HttpRequest { Url = "http://x" };
             await client.ReadServerSentEventsAsync(req, _ => { });
-            // SSE 层设自己的 OnHeadersReceived（非 2xx 检查），不是用户的
             Assert.NotNull(client.Captured.OnHeadersReceived);
-            Assert.NotSame(userCb, client.Captured.OnHeadersReceived);
         }
 
         // —— RunOneConnectionAsync 的 lastEventId 注入（供 Layer 2 重连续传用）——

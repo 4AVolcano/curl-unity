@@ -15,6 +15,7 @@ namespace CurlUnity.Http
         // 就是 use-after-free。getinfo 是纯内存读，锁开销可忽略。
         private readonly object _handleLock = new();
         private IntPtr _easyHandle;
+        private bool _ownsHandle;
         private readonly long _statusCode;
         private byte[] _body;
         private byte[] _rawHeaders;
@@ -26,14 +27,25 @@ namespace CurlUnity.Http
         }
 
         internal HttpResponse(ICurlApi api, CurlResponse raw)
-            : this(api, raw.EasyHandle, raw.StatusCode, raw.RawHeaders)
         {
+            _api = api ?? throw new ArgumentNullException(nameof(api));
+            _easyHandle = raw.EasyHandle;
+            _statusCode = raw.StatusCode;
             _body = raw.Body;
+            _rawHeaders = raw.RawHeaders;
+            _ownsHandle = true;
+
+            if (_easyHandle != IntPtr.Zero)
+                CurlGlobal.Acquire(_api);
+            else
+                GC.SuppressFinalize(this);
         }
 
         /// <summary>
-        /// 早期构造：响应头就绪时创建（body 尚未到达，<see cref="Body"/> 为 null）。
-        /// 传输完成后由 <see cref="FinalizeTransfer"/> 填入 body 和最终 headers。
+        /// 早期构造（deferred ownership）：响应头就绪时创建，handle 仅借用，不拥有
+        /// cleanup 权。回调中可安全读取 getinfo 属性；传输完成后由
+        /// <see cref="FinalizeTransfer"/> 提升为完整所有权。取消/错误路径下 handle 由
+        /// 请求侧释放，通过 <see cref="InvalidateHandle"/> 置零避免 UAF。
         /// </summary>
         internal HttpResponse(ICurlApi api, IntPtr easyHandle, long statusCode, byte[] rawHeaders)
         {
@@ -41,11 +53,9 @@ namespace CurlUnity.Http
             _easyHandle = easyHandle;
             _statusCode = statusCode;
             _rawHeaders = rawHeaders;
+            _ownsHandle = false;
 
-            if (_easyHandle != IntPtr.Zero)
-                CurlGlobal.Acquire(_api);
-            else
-                GC.SuppressFinalize(this);
+            GC.SuppressFinalize(this);
         }
 
         internal IntPtr EasyHandle => _easyHandle;
@@ -110,7 +120,8 @@ namespace CurlUnity.Http
         }
 
         /// <summary>
-        /// 传输完成后填入 body 和最终 headers（仅限 earlyResponse 路径）。
+        /// 传输完成：填入 body/headers 并提升 handle 所有权（deferred → full）。
+        /// 此后 Dispose/finalizer 负责 <c>EasyCleanup</c>。
         /// </summary>
         internal void FinalizeTransfer(byte[] body, byte[] rawHeaders)
         {
@@ -120,24 +131,25 @@ namespace CurlUnity.Http
                 _rawHeaders = rawHeaders;
                 _parsedHeaders = null;
             }
+
+            if (!_ownsHandle && _easyHandle != IntPtr.Zero)
+            {
+                _ownsHandle = true;
+                CurlGlobal.Acquire(_api);
+                GC.ReRegisterForFinalize(this);
+            }
         }
 
         /// <summary>
-        /// 解除 easy handle 所有权但不调用 <c>curl_easy_cleanup</c>。
-        /// 用于 <c>MultiRemoveHandle</c> 失败时：handle 仍然附着在 multi 上，
-        /// 清理权归 <c>multi.Dispose</c> 兜底。
+        /// 置零 handle 指针，防止取消/错误路径下 getinfo UAF。不做 EasyCleanup
+        /// （handle 由请求侧或 multi 释放）。
         /// </summary>
-        internal void ReleaseWithoutCleanup()
+        internal void InvalidateHandle()
         {
-            IntPtr handle;
             lock (_handleLock)
             {
-                handle = _easyHandle;
                 _easyHandle = IntPtr.Zero;
             }
-            if (handle != IntPtr.Zero)
-                CurlGlobal.Release(_api);
-            GC.SuppressFinalize(this);
         }
 
         public void Dispose()
@@ -158,10 +170,6 @@ namespace CurlUnity.Http
 
         private void ReleaseHandle(bool fromFinalizer)
         {
-            // _handleLock 同时保证：
-            //   1) 并发 Dispose / Dispose+finalizer 只有一次真正执行 EasyCleanup
-            //   2) 与 TryGetInfo* 互斥——否则 getinfo 检查通过后 handle 被并发
-            //      cleanup，native 层拿到已释放的 handle 就是 use-after-free
             IntPtr handle;
             lock (_handleLock)
             {
@@ -169,6 +177,9 @@ namespace CurlUnity.Http
                 _easyHandle = IntPtr.Zero;
             }
             if (handle == IntPtr.Zero) return;
+
+            if (!_ownsHandle)
+                return;
 
             if (fromFinalizer)
                 CurlLog.Warn(

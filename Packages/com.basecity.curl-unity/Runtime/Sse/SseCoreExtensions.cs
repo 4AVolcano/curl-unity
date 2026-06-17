@@ -74,6 +74,9 @@ namespace CurlUnity.Sse
             if (request.OnDataReceived != null)
                 throw new InvalidOperationException(
                     "SSE 需接管响应流式回调；请勿在传入的 request 上设置 OnDataReceived。");
+            if (request.OnHeadersReceived != null)
+                throw new InvalidOperationException(
+                    "SSE 需接管 OnHeadersReceived（用于非 2xx 快速失败）；请勿在传入的 request 上设置 OnHeadersReceived。");
 
             var sseRequest = CloneForSse(request, lastEventId);
             sseRequest.OnHeadersReceived = resp =>
