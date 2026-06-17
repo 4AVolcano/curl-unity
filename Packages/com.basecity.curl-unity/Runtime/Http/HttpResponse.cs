@@ -16,6 +16,7 @@ namespace CurlUnity.Http
         private readonly object _handleLock = new();
         private IntPtr _easyHandle;
         private bool _ownsHandle;
+        private bool _disposeRequested;
         private readonly long _statusCode;
         private byte[] _body;
         private byte[] _rawHeaders;
@@ -121,7 +122,7 @@ namespace CurlUnity.Http
 
         /// <summary>
         /// 传输完成：填入 body/headers 并提升 handle 所有权（deferred → full）。
-        /// 此后 Dispose/finalizer 负责 <c>EasyCleanup</c>。
+        /// 若回调中已调 Dispose（<see cref="_disposeRequested"/>），promote 后立即 cleanup。
         /// </summary>
         internal void FinalizeTransfer(byte[] body, byte[] rawHeaders)
         {
@@ -132,11 +133,25 @@ namespace CurlUnity.Http
                 _parsedHeaders = null;
             }
 
-            if (!_ownsHandle && _easyHandle != IntPtr.Zero)
+            lock (_handleLock)
             {
-                _ownsHandle = true;
-                CurlGlobal.Acquire(_api);
-                GC.ReRegisterForFinalize(this);
+                if (!_ownsHandle && _easyHandle != IntPtr.Zero)
+                {
+                    _ownsHandle = true;
+                    CurlGlobal.Acquire(_api);
+
+                    if (_disposeRequested)
+                    {
+                        var h = _easyHandle;
+                        _easyHandle = IntPtr.Zero;
+                        _api.EasyCleanup(h);
+                        CurlGlobal.Release(_api);
+                    }
+                    else
+                    {
+                        GC.ReRegisterForFinalize(this);
+                    }
+                }
             }
         }
 
@@ -173,13 +188,18 @@ namespace CurlUnity.Http
             IntPtr handle;
             lock (_handleLock)
             {
+                if (!_ownsHandle)
+                {
+                    // deferred ownership: 不 cleanup，只记录请求；
+                    // FinalizeTransfer promote 后会检查此标志并立即 cleanup。
+                    _disposeRequested = true;
+                    return;
+                }
+
                 handle = _easyHandle;
                 _easyHandle = IntPtr.Zero;
             }
             if (handle == IntPtr.Zero) return;
-
-            if (!_ownsHandle)
-                return;
 
             if (fromFinalizer)
                 CurlLog.Warn(

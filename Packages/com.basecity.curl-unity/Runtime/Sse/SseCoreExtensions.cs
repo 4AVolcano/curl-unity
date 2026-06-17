@@ -39,7 +39,7 @@ namespace CurlUnity.Sse
         /// </remarks>
         /// <exception cref="InvalidOperationException">
         /// <paramref name="request"/> 已设置 <see cref="IHttpRequest.OnDataReceived"/>
-        /// （SSE 需接管该回调）。
+        /// 或 <see cref="IHttpRequest.OnHeadersReceived"/>（SSE 需接管这两个回调）。
         /// </exception>
         /// <exception cref="SseHttpStatusException">
         /// 服务端返回非 2xx HTTP 状态码。
