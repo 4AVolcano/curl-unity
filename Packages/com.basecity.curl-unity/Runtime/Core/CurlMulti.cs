@@ -402,12 +402,32 @@ namespace CurlUnity.Core
 
             _api.GetInfoLong(easyHandle, CurlNative.CURLINFO_RESPONSE_CODE, out var statusCode);
 
+            var body = request.DataCallback != null ? null : request.BodyBuffer.ToArray();
+            var rawHeaders = request.HeaderBuffer?.ToArray();
+
+            // 无 body 兜底: HEAD / 204 等 OnWriteData 从未触发，如果用户设了回调在此补触发。
+            // 仅 curlCode == OK 时触发（连接失败等 curl 错误不应触发 "headers received"）。
+            if (curlCode == CurlNative.CURLE_OK
+                && !request.HeadersReceivedFired
+                && request.HeadersReceivedCallback != null)
+            {
+                request.HeadersReceivedFired = true;
+                try
+                {
+                    request.HeadersReceivedCallback(statusCode, rawHeaders);
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref request.DownloadError, ex, null);
+                }
+            }
+
             var response = new CurlResponse
             {
                 CurlCode = curlCode,
                 StatusCode = statusCode,
-                Body = request.DataCallback != null ? null : request.BodyBuffer.ToArray(),
-                RawHeaders = request.HeaderBuffer?.ToArray(),
+                Body = body,
+                RawHeaders = rawHeaders,
                 EasyHandle = request.Handle  // 所有权转移
             };
 
@@ -444,6 +464,23 @@ namespace CurlUnity.Core
                 CurlLog.Error(
                     $"OnWriteData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
                 return UIntPtr.Zero;
+            }
+
+            // OnHeadersReceived: 首字节到达 → 触发一次用户回调（早于 DataCallback）
+            if (request.HeadersReceivedCallback != null && !request.HeadersReceivedFired)
+            {
+                request.HeadersReceivedFired = true;
+                try
+                {
+                    request.Api.GetInfoLong(
+                        request.Handle, CurlNative.CURLINFO_RESPONSE_CODE, out var sc);
+                    request.HeadersReceivedCallback(sc, request.HeaderBuffer?.ToArray());
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.CompareExchange(ref request.DownloadError, ex, null);
+                    return UIntPtr.Zero;
+                }
             }
 
             try

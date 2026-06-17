@@ -54,6 +54,9 @@ namespace CurlUnity.UnitTests.Tests
                 lock (Requests) Requests.Add(request);
                 var b = _plan(idx);
 
+                var response = new StubResponse(b.StatusCode);
+                request.OnHeadersReceived?.Invoke(response);
+
                 if (b.Bytes != null && request.OnDataReceived != null)
                 {
                     var bytes = Encoding.UTF8.GetBytes(b.Bytes);
@@ -65,12 +68,11 @@ namespace CurlUnity.UnitTests.Tests
                     case Kind.Throw:
                         throw b.Exception;
                     case Kind.Block:
-                        // RunContinuationsAsynchronously：贴合真实 SendAsync（取消后延续不在取消线程同步跑）
                         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                         using (ct.Register(() => tcs.TrySetResult(true))) await tcs.Task;
                         throw new OperationCanceledException(ct);
                     default:
-                        return new StubResponse(b.StatusCode);
+                        return response;
                 }
             }
 

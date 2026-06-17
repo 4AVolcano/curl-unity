@@ -119,6 +119,20 @@ namespace CurlUnity.Http
 
             _pendingTasks[tcs] = 0;
 
+            // OnHeadersReceived 闭包编排：earlyResponse 在 worker 线程的
+            // HeadersReceivedCallback 中创建，OnComplete 中复用。两者都在同一
+            // worker 线程执行，无竞态。
+            HttpResponse earlyResponse = null;
+            var userHeadersCb = request.OnHeadersReceived;
+            if (userHeadersCb != null)
+            {
+                curlReq.HeadersReceivedCallback = (statusCode, rawHeaders) =>
+                {
+                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode, rawHeaders);
+                    userHeadersCb(earlyResponse);
+                };
+            }
+
             // CancellationToken → 取消请求（提交到后台线程执行 remove_handle）
             if (ct.CanBeCanceled)
             {
@@ -151,6 +165,9 @@ namespace CurlUnity.Http
                     // OperationCanceledException,直接透传。
                     if (curlResp.FailureException != null)
                     {
+                        // earlyResponse 持有 handle；FailureException + EasyHandle==Zero
+                        // 意味着 MultiRemoveHandle 失败 → handle 仍在 multi 中 → 不能 EasyCleanup
+                        earlyResponse?.ReleaseWithoutCleanup();
                         if (tcs.TrySetException(curlResp.FailureException))
                             Diagnostics?.RecordFailure();
                         return;
@@ -161,7 +178,9 @@ namespace CurlUnity.Http
                     // 但根因是用户代码,应 rethrow 原异常(保留栈),不包装 CurlHttpException。
                     if (curlReq.UploadError != null)
                     {
-                        if (curlResp.EasyHandle != IntPtr.Zero)
+                        if (earlyResponse != null)
+                            earlyResponse.Dispose();
+                        else if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.UploadError))
                             Diagnostics?.RecordFailure();
@@ -169,7 +188,9 @@ namespace CurlUnity.Http
                     }
                     if (curlReq.DownloadError != null)
                     {
-                        if (curlResp.EasyHandle != IntPtr.Zero)
+                        if (earlyResponse != null)
+                            earlyResponse.Dispose();
+                        else if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.DownloadError))
                             Diagnostics?.RecordFailure();
@@ -179,7 +200,9 @@ namespace CurlUnity.Http
                     // libcurl 报错 → CurlHttpException,释放 handle,不给调用方 response。
                     if (curlResp.CurlCode != CurlNative.CURLE_OK)
                     {
-                        if (curlResp.EasyHandle != IntPtr.Zero)
+                        if (earlyResponse != null)
+                            earlyResponse.Dispose();
+                        else if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(CurlHttpException.FromEasyCode(
                             curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode))))
@@ -187,16 +210,20 @@ namespace CurlUnity.Http
                         return;
                     }
 
-                    // 成功路径: Record 必须在 TrySetResult 之前 —— tcs 是
-                    // RunContinuationsAsynchronously, TrySetResult 后 await 的 continuation
-                    // 会被调度到 threadpool 与 OnComplete 余下代码并发, 如果 Record 在后面,
-                    // 用户代码里紧接着的 GetSnapshot / GetTiming 可能抢先读到未更新的状态。
-                    // cancel 竞态在成功路径不存在: cancel 走 _worker.Cancel → MultiRemoveHandle
-                    // 后 OnComplete 不会被调用, 所以这里跑到说明没取消成功, Record 合法。
-                    var response = new HttpResponse(_api, curlResp);
+                    // 成功路径: earlyResponse 存在时复用同一实例，填入 body 和最终 headers。
+                    HttpResponse response;
+                    if (earlyResponse != null)
+                    {
+                        response = earlyResponse;
+                        response.FinalizeTransfer(curlResp.Body, curlResp.RawHeaders);
+                    }
+                    else
+                    {
+                        response = new HttpResponse(_api, curlResp);
+                    }
                     Diagnostics?.Record(response);
                     if (!tcs.TrySetResult(response))
-                        response.Dispose();  // 理论上不会发生(见上注释), 兜底释放
+                        response.Dispose();
                 }
                 catch (Exception ex)
                 {

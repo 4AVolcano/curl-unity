@@ -22,6 +22,7 @@ namespace CurlUnity.Http
         public bool EnableCookies { get; set; }
         public bool AutoDecompressResponse { get; set; } = true;
         public Action<byte[], int, int> OnDataReceived { get; set; }
+        public Action<IHttpResponse> OnHeadersReceived { get; set; }
 
         /// <summary>
         /// 是否启用 TCP keep-alive（<c>CURLOPT_TCP_KEEPALIVE</c>）。内部字段，不在

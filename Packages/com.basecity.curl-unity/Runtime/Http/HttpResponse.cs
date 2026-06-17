@@ -16,8 +16,8 @@ namespace CurlUnity.Http
         private readonly object _handleLock = new();
         private IntPtr _easyHandle;
         private readonly long _statusCode;
-        private readonly byte[] _body;
-        private readonly byte[] _rawHeaders;
+        private byte[] _body;
+        private byte[] _rawHeaders;
         private IReadOnlyDictionary<string, string[]> _parsedHeaders;
 
         internal HttpResponse(CurlResponse raw)
@@ -26,17 +26,22 @@ namespace CurlUnity.Http
         }
 
         internal HttpResponse(ICurlApi api, CurlResponse raw)
+            : this(api, raw.EasyHandle, raw.StatusCode, raw.RawHeaders)
+        {
+            _body = raw.Body;
+        }
+
+        /// <summary>
+        /// 早期构造：响应头就绪时创建（body 尚未到达，<see cref="Body"/> 为 null）。
+        /// 传输完成后由 <see cref="FinalizeTransfer"/> 填入 body 和最终 headers。
+        /// </summary>
+        internal HttpResponse(ICurlApi api, IntPtr easyHandle, long statusCode, byte[] rawHeaders)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
-            _easyHandle = raw.EasyHandle;
-            _statusCode = raw.StatusCode;
-            _body = raw.Body;
-            _rawHeaders = raw.RawHeaders;
+            _easyHandle = easyHandle;
+            _statusCode = statusCode;
+            _rawHeaders = rawHeaders;
 
-            // 持有 native easy handle 期间引用计数压住 curl_global_cleanup：
-            // 调用方漏 Dispose 时 finalizer 才能安全地调 curl_easy_cleanup
-            // （否则 client 全部 Dispose 后 global cleanup 先行，finalizer 再
-            // cleanup 就是对已卸载库状态的 UAF）。
             if (_easyHandle != IntPtr.Zero)
                 CurlGlobal.Acquire(_api);
             else
@@ -102,6 +107,37 @@ namespace CurlUnity.Http
                 if (_rawHeaders == null) return null;
                 return _parsedHeaders ??= ParseHeaders(_rawHeaders);
             }
+        }
+
+        /// <summary>
+        /// 传输完成后填入 body 和最终 headers（仅限 earlyResponse 路径）。
+        /// </summary>
+        internal void FinalizeTransfer(byte[] body, byte[] rawHeaders)
+        {
+            _body = body;
+            if (rawHeaders != null)
+            {
+                _rawHeaders = rawHeaders;
+                _parsedHeaders = null;
+            }
+        }
+
+        /// <summary>
+        /// 解除 easy handle 所有权但不调用 <c>curl_easy_cleanup</c>。
+        /// 用于 <c>MultiRemoveHandle</c> 失败时：handle 仍然附着在 multi 上，
+        /// 清理权归 <c>multi.Dispose</c> 兜底。
+        /// </summary>
+        internal void ReleaseWithoutCleanup()
+        {
+            IntPtr handle;
+            lock (_handleLock)
+            {
+                handle = _easyHandle;
+                _easyHandle = IntPtr.Zero;
+            }
+            if (handle != IntPtr.Zero)
+                CurlGlobal.Release(_api);
+            GC.SuppressFinalize(this);
         }
 
         public void Dispose()

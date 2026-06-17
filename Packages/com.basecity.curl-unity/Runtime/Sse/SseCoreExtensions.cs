@@ -29,15 +29,20 @@ namespace CurlUnity.Sse
         /// <c>Accept: text/event-stream</c>（用户已提供 Accept 则不覆盖）。
         /// </para>
         /// <para>
-        /// 与 <see cref="IHttpClient.SendAsync"/> 一致：HTTP 4xx/5xx 不抛，经
-        /// <see cref="IHttpResponse.StatusCode"/> 判断；网络/TLS/超时抛 <c>CurlHttpException</c>，
-        /// 取消抛 <see cref="OperationCanceledException"/>。SSE 长连接建议在 request 上设
+        /// 非 2xx 状态码在 body 到达前通过 <see cref="IHttpRequest.OnHeadersReceived"/>
+        /// 以 <see cref="SseHttpStatusException"/> 抛出，不会解析无效的事件流。
+        /// 2xx 响应正常返回 <see cref="IHttpResponse"/>（含 204）。
+        /// 网络/TLS/超时抛 <c>CurlHttpException</c>，取消抛 <see cref="OperationCanceledException"/>。
+        /// SSE 长连接建议在 request 上设
         /// <see cref="IHttpRequest.TimeoutMs"/>=0；本方法内部已为该连接开启 TCP keep-alive。
         /// </para>
         /// </remarks>
         /// <exception cref="InvalidOperationException">
         /// <paramref name="request"/> 已设置 <see cref="IHttpRequest.OnDataReceived"/>
         /// （SSE 需接管该回调）。
+        /// </exception>
+        /// <exception cref="SseHttpStatusException">
+        /// 服务端返回非 2xx HTTP 状态码。
         /// </exception>
         public static Task<IHttpResponse> ReadServerSentEventsAsync(
             this IHttpClient client, IHttpRequest request,
@@ -71,6 +76,11 @@ namespace CurlUnity.Sse
                     "SSE 需接管响应流式回调；请勿在传入的 request 上设置 OnDataReceived。");
 
             var sseRequest = CloneForSse(request, lastEventId);
+            sseRequest.OnHeadersReceived = resp =>
+            {
+                if (resp.StatusCode < 200 || resp.StatusCode >= 300)
+                    throw new SseHttpStatusException(resp.StatusCode);
+            };
             sseRequest.OnDataReceived = (buf, offset, len) =>
             {
                 onByteReceived?.Invoke();
@@ -96,7 +106,7 @@ namespace CurlUnity.Sse
                 EnableCookies = src.EnableCookies,
                 AutoDecompressResponse = src.AutoDecompressResponse,
                 TcpKeepAlive = true, // SSE 长连接默认开 TCP keep-alive（HttpRequest 内部字段）
-                // OnDataReceived 故意不复制：由 SSE 接管（已在 RunOneConnectionAsync 校验未设置）
+                // OnDataReceived / OnHeadersReceived 故意不复制：由 SSE 层自行决定是否使用
             };
         }
 

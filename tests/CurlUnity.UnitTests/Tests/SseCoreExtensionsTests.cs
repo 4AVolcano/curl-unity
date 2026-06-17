@@ -27,8 +27,10 @@ namespace CurlUnity.UnitTests.Tests
             public Task<IHttpResponse> SendAsync(IHttpRequest request, CancellationToken ct = default)
             {
                 Captured = request;
+                var response = Responder?.Invoke(request) ?? new StubResponse(200);
+                request.OnHeadersReceived?.Invoke(response);
                 OnSend?.Invoke(request);
-                return Task.FromResult(Responder?.Invoke(request) ?? new StubResponse(200));
+                return Task.FromResult(response);
             }
 
             public void SetProxy(HttpProxy proxy) { }
@@ -97,6 +99,7 @@ namespace CurlUnity.UnitTests.Tests
             var req = new HttpRequest { Url = "http://x" };
             await client.ReadServerSentEventsAsync(req, _ => { });
             Assert.Null(req.OnDataReceived);          // 用户对象未被设回调
+            Assert.Null(req.OnHeadersReceived);       // 用户对象未被设回调
             Assert.Null(req.Headers);                 // 用户对象 Headers 未被改
             Assert.NotSame(req, client.Captured);     // 发出的是 clone
         }
@@ -128,6 +131,22 @@ namespace CurlUnity.UnitTests.Tests
             var req = new HttpRequest { Url = "http://x" };
             using var resp = await client.ReadServerSentEventsAsync(req, _ => { });
             Assert.Equal(204, resp.StatusCode);
+        }
+
+        [Fact]
+        public async Task CloneForSse_DoesNotCopyUserOnHeadersReceived()
+        {
+            using var client = new CapturingHttpClient();
+            Action<IHttpResponse> userCb = _ => { };
+            var req = new HttpRequest
+            {
+                Url = "http://x",
+                OnHeadersReceived = userCb
+            };
+            await client.ReadServerSentEventsAsync(req, _ => { });
+            // SSE 层设自己的 OnHeadersReceived（非 2xx 检查），不是用户的
+            Assert.NotNull(client.Captured.OnHeadersReceived);
+            Assert.NotSame(userCb, client.Captured.OnHeadersReceived);
         }
 
         // —— RunOneConnectionAsync 的 lastEventId 注入（供 Layer 2 重连续传用）——

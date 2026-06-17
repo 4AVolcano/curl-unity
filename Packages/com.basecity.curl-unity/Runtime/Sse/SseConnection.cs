@@ -84,7 +84,6 @@ namespace CurlUnity.Sse
                             {
                                 try { _idleCts?.CancelAfter(hb); } catch (ObjectDisposedException) { }
                             }
-                            // 仅置 Open；退避重置移到「确认 2xx」后，避免非 2xx 响应体字节误重置退避
                             if (!hadByte)
                             {
                                 hadByte = true;
@@ -97,14 +96,12 @@ namespace CurlUnity.Sse
                             _client, request, _parser, RaiseEvent, OnByte, sendTok, lastEventId)
                             .ConfigureAwait(false);
 
-                        // 已知限制（待 Core「响应头就绪回调」解决）：状态码要到连接结束才能确认，
-                        // 故非 2xx 响应体若恰为 SSE 格式，可能已先触发少量事件 / 短暂 Open。
+                        // 非 2xx 已由 RunOneConnectionAsync 的 OnHeadersReceived 抛
+                        // SseHttpStatusException（body 到达前），不会解析出伪事件。
+                        // 到这里一定是 2xx。
                         if (resp.StatusCode == 204)
                             break; // SSE 规范：204 No Content = 服务端要求停止重连
-                        if (resp.StatusCode >= 200 && resp.StatusCode < 300)
-                            delay = _options.ReconnectDelayInit; // 确认 2xx → 重置退避
-                        else
-                            RaiseError(new SseHttpStatusException(resp.StatusCode));
+                        delay = _options.ReconnectDelayInit;
                     }
                     catch (OperationCanceledException) when (_linkedCt.IsCancellationRequested)
                     {

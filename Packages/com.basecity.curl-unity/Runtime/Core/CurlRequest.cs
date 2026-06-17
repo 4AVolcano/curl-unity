@@ -53,6 +53,11 @@ namespace CurlUnity.Core
         // → OnComplete 时看到 DownloadError 非空,优先 rethrow 用户异常,不包 CurlHttpException。
         internal Exception DownloadError;
 
+        // 响应头就绪回调（由 CurlHttpClient.SendAsync 闭包设置）。签名为核心层类型
+        // (statusCode, rawHeaders)，Http 层在闭包内负责包装成 IHttpResponse。
+        internal Action<long, byte[]> HeadersReceivedCallback;
+        internal bool HeadersReceivedFired;
+
         private int _state = (int)CurlRequestState.Created;
         private bool _handleTransferred;
 
