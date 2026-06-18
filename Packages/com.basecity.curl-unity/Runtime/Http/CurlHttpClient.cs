@@ -46,6 +46,9 @@ namespace CurlUnity.Http
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
 
+        /// <summary>开启 libcurl CURLOPT_VERBOSE,内部活动写到 stderr。仅诊断用,默认 false。</summary>
+        public bool Verbose { get; set; } = false;
+
         /// <summary>
         /// 默认 User-Agent。对所有请求生效;请求级 <see cref="IHttpRequest.Headers"/>
         /// 里设 <c>User-Agent</c> 会覆盖本值(libcurl slist 优先于 CURLOPT_USERAGENT)。
@@ -116,6 +119,21 @@ namespace CurlUnity.Http
 
             _pendingTasks[tcs] = 0;
 
+            // OnHeadersReceived 闭包编排：earlyResponse 在 worker 线程的
+            // HeadersReceivedCallback 中创建，OnComplete 中复用。两者都在同一
+            // worker 线程执行，无竞态。
+            HttpResponse earlyResponse = null;
+            var userHeadersCb = request.OnHeadersReceived;
+            if (userHeadersCb != null)
+            {
+                curlReq.HeadersReceivedCallback = (statusCode, rawHeaders) =>
+                {
+                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode, rawHeaders);
+                    userHeadersCb(earlyResponse);
+                };
+                curlReq.OnHandleFreed = () => earlyResponse?.InvalidateHandle();
+            }
+
             // CancellationToken → 取消请求（提交到后台线程执行 remove_handle）
             if (ct.CanBeCanceled)
             {
@@ -146,18 +164,22 @@ namespace CurlUnity.Http
                     // Pipeline 未到 libcurl 就失败的路径(add_handle 失败、非法状态提交、
                     // remove_handle 失败等),FailureException 已经是 CurlHttpException 或
                     // OperationCanceledException,直接透传。
+                    // earlyResponse 使用 deferred ownership：传输完成前不拥有 cleanup 权。
+                    // 错误/取消路径下 handle 由请求侧释放，这里只需 invalidate 避免 getinfo UAF。
+
                     if (curlResp.FailureException != null)
                     {
+                        // FailureException + EasyHandle==Zero: MultiRemoveHandle 失败，
+                        // handle 仍在 multi 中，不做 EasyCleanup。
+                        earlyResponse?.InvalidateHandle();
                         if (tcs.TrySetException(curlResp.FailureException))
                             Diagnostics?.RecordFailure();
                         return;
                     }
 
-                    // 用户回调异常优先于 libcurl 返回码: Stream.Read / DataCallback 抛异常
-                    // 会让 libcurl 以 CURLE_ABORTED_BY_CALLBACK / CURLE_WRITE_ERROR 结束,
-                    // 但根因是用户代码,应 rethrow 原异常(保留栈),不包装 CurlHttpException。
                     if (curlReq.UploadError != null)
                     {
+                        earlyResponse?.InvalidateHandle();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.UploadError))
@@ -166,6 +188,7 @@ namespace CurlUnity.Http
                     }
                     if (curlReq.DownloadError != null)
                     {
+                        earlyResponse?.InvalidateHandle();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.DownloadError))
@@ -173,9 +196,9 @@ namespace CurlUnity.Http
                         return;
                     }
 
-                    // libcurl 报错 → CurlHttpException,释放 handle,不给调用方 response。
                     if (curlResp.CurlCode != CurlNative.CURLE_OK)
                     {
+                        earlyResponse?.InvalidateHandle();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(CurlHttpException.FromEasyCode(
@@ -184,16 +207,20 @@ namespace CurlUnity.Http
                         return;
                     }
 
-                    // 成功路径: Record 必须在 TrySetResult 之前 —— tcs 是
-                    // RunContinuationsAsynchronously, TrySetResult 后 await 的 continuation
-                    // 会被调度到 threadpool 与 OnComplete 余下代码并发, 如果 Record 在后面,
-                    // 用户代码里紧接着的 GetSnapshot / GetTiming 可能抢先读到未更新的状态。
-                    // cancel 竞态在成功路径不存在: cancel 走 _worker.Cancel → MultiRemoveHandle
-                    // 后 OnComplete 不会被调用, 所以这里跑到说明没取消成功, Record 合法。
-                    var response = new HttpResponse(_api, curlResp);
+                    // 成功路径: earlyResponse 存在时复用同一实例，填入 body 和最终 headers。
+                    HttpResponse response;
+                    if (earlyResponse != null)
+                    {
+                        response = earlyResponse;
+                        response.FinalizeTransfer(curlResp.Body, curlResp.RawHeaders);
+                    }
+                    else
+                    {
+                        response = new HttpResponse(_api, curlResp);
+                    }
                     Diagnostics?.Record(response);
                     if (!tcs.TrySetResult(response))
-                        response.Dispose();  // 理论上不会发生(见上注释), 兜底释放
+                        response.Dispose();
                 }
                 catch (Exception ex)
                 {
@@ -302,6 +329,14 @@ namespace CurlUnity.Http
 
             // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
             CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
+
+            // TCP keep-alive：SSE 等长连接内部开启（HttpRequest 内部字段，不对外暴露）。
+            // 不处理 Nagle：libcurl 默认 TCP_NODELAY=1（Nagle 已关），无需设置。
+            if (request is HttpRequest hr && hr.TcpKeepAlive)
+                CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
+
+            // CURLOPT_VERBOSE = 41 (CURLOPTTYPE_LONG + 41)。诊断用,默认关。
+            if (Verbose) _api.SetOptLong(h, 41, 1);
 
             // HTTP version（枚举值与 curl 定义一致，直接 cast）
             CheckSetOpt("CURLOPT_HTTP_VERSION",

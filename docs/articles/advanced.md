@@ -63,6 +63,30 @@ using var resp = await client.SendAsync(req);
 // 此时 resp.Body == null (流式下载不缓冲到内存)
 ```
 
+## 响应头就绪回调（OnHeadersReceived）
+
+流式下载等场景下，如需在 body 到达前检查状态码：
+
+```csharp
+var req = new HttpRequest
+{
+    Url = streamUrl,
+    OnHeadersReceived = resp =>
+    {
+        // 所有响应头到达、body 尚未开始时触发一次
+        // resp 与 SendAsync 返回的是同一实例，此时 Body 为 null
+        if (resp.StatusCode != 200)
+            throw new Exception($"unexpected {resp.StatusCode}");
+    },
+    OnDataReceived = (buf, off, len) => { /* 处理 body */ },
+};
+using var resp = await client.SendAsync(req);
+```
+
+- 回调中 throw 即中止传输，异常透传给 `SendAsync` 的 Task。
+- HEAD / 204 等无 body 响应也会触发。
+- `EnableResponseHeaders = true` 时回调中 `resp.Headers` 可用；否则为 null，但 `StatusCode` / `ContentType` / `Version` 始终可用。
+
 ## 代理
 
 ```csharp

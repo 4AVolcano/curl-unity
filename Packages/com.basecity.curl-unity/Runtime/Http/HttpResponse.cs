@@ -15,9 +15,11 @@ namespace CurlUnity.Http
         // 就是 use-after-free。getinfo 是纯内存读，锁开销可忽略。
         private readonly object _handleLock = new();
         private IntPtr _easyHandle;
+        private bool _ownsHandle;
+        private bool _disposeRequested;
         private readonly long _statusCode;
-        private readonly byte[] _body;
-        private readonly byte[] _rawHeaders;
+        private byte[] _body;
+        private byte[] _rawHeaders;
         private IReadOnlyDictionary<string, string[]> _parsedHeaders;
 
         internal HttpResponse(CurlResponse raw)
@@ -32,15 +34,29 @@ namespace CurlUnity.Http
             _statusCode = raw.StatusCode;
             _body = raw.Body;
             _rawHeaders = raw.RawHeaders;
+            _ownsHandle = true;
 
-            // 持有 native easy handle 期间引用计数压住 curl_global_cleanup：
-            // 调用方漏 Dispose 时 finalizer 才能安全地调 curl_easy_cleanup
-            // （否则 client 全部 Dispose 后 global cleanup 先行，finalizer 再
-            // cleanup 就是对已卸载库状态的 UAF）。
             if (_easyHandle != IntPtr.Zero)
                 CurlGlobal.Acquire(_api);
             else
                 GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// 早期构造（deferred ownership）：响应头就绪时创建，handle 仅借用，不拥有
+        /// cleanup 权。回调中可安全读取 getinfo 属性；传输完成后由
+        /// <see cref="FinalizeTransfer"/> 提升为完整所有权。取消/错误路径下 handle 由
+        /// 请求侧释放，通过 <see cref="InvalidateHandle"/> 置零避免 UAF。
+        /// </summary>
+        internal HttpResponse(ICurlApi api, IntPtr easyHandle, long statusCode, byte[] rawHeaders)
+        {
+            _api = api ?? throw new ArgumentNullException(nameof(api));
+            _easyHandle = easyHandle;
+            _statusCode = statusCode;
+            _rawHeaders = rawHeaders;
+            _ownsHandle = false;
+
+            GC.SuppressFinalize(this);
         }
 
         internal IntPtr EasyHandle => _easyHandle;
@@ -104,6 +120,53 @@ namespace CurlUnity.Http
             }
         }
 
+        /// <summary>
+        /// 传输完成：填入 body/headers 并提升 handle 所有权（deferred → full）。
+        /// 若回调中已调 Dispose（<see cref="_disposeRequested"/>），promote 后立即 cleanup。
+        /// </summary>
+        internal void FinalizeTransfer(byte[] body, byte[] rawHeaders)
+        {
+            _body = body;
+            if (rawHeaders != null)
+            {
+                _rawHeaders = rawHeaders;
+                _parsedHeaders = null;
+            }
+
+            lock (_handleLock)
+            {
+                if (!_ownsHandle && _easyHandle != IntPtr.Zero)
+                {
+                    _ownsHandle = true;
+                    CurlGlobal.Acquire(_api);
+
+                    if (_disposeRequested)
+                    {
+                        var h = _easyHandle;
+                        _easyHandle = IntPtr.Zero;
+                        _api.EasyCleanup(h);
+                        CurlGlobal.Release(_api);
+                    }
+                    else
+                    {
+                        GC.ReRegisterForFinalize(this);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 置零 handle 指针，防止取消/错误路径下 getinfo UAF。不做 EasyCleanup
+        /// （handle 由请求侧或 multi 释放）。
+        /// </summary>
+        internal void InvalidateHandle()
+        {
+            lock (_handleLock)
+            {
+                _easyHandle = IntPtr.Zero;
+            }
+        }
+
         public void Dispose()
         {
             ReleaseHandle(fromFinalizer: false);
@@ -122,13 +185,17 @@ namespace CurlUnity.Http
 
         private void ReleaseHandle(bool fromFinalizer)
         {
-            // _handleLock 同时保证：
-            //   1) 并发 Dispose / Dispose+finalizer 只有一次真正执行 EasyCleanup
-            //   2) 与 TryGetInfo* 互斥——否则 getinfo 检查通过后 handle 被并发
-            //      cleanup，native 层拿到已释放的 handle 就是 use-after-free
             IntPtr handle;
             lock (_handleLock)
             {
+                if (!_ownsHandle)
+                {
+                    // deferred ownership: 不 cleanup，只记录请求；
+                    // FinalizeTransfer promote 后会检查此标志并立即 cleanup。
+                    _disposeRequested = true;
+                    return;
+                }
+
                 handle = _easyHandle;
                 _easyHandle = IntPtr.Zero;
             }

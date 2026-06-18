@@ -154,5 +154,21 @@ namespace CurlUnity.Http
         /// 回调里同步等 I/O、锁或其它长耗时工作。
         /// </remarks>
         Action<byte[], int, int> OnDataReceived { get; set; }
+
+        /// <summary>
+        /// 响应头就绪回调。所有响应头到达后、第一块 body 数据之前调用一次。
+        /// 回调参数是 <see cref="IHttpResponse"/>——与 <see cref="IHttpClient.SendAsync"/>
+        /// 最终返回的是同一实例。回调时 <see cref="IHttpResponse.StatusCode"/>、
+        /// <see cref="IHttpResponse.ContentType"/>、<see cref="IHttpResponse.Version"/> 等
+        /// 通过 <c>curl_easy_getinfo</c> 读取的属性可用；<see cref="IHttpResponse.Body"/>
+        /// 为 null；<see cref="IHttpResponse.Headers"/> 仅在 <see cref="EnableResponseHeaders"/>
+        /// 为 true 时可用。
+        /// </summary>
+        /// <remarks>
+        /// <para>在后台线程调用。回调抛异常等同于 <see cref="OnDataReceived"/> 抛异常——
+        /// 中止传输，异常原样透传给 <c>SendAsync</c> Task。</para>
+        /// <para>HEAD 请求或 204 等无 body 的响应也会触发本回调（在传输完成时）。</para>
+        /// </remarks>
+        Action<IHttpResponse> OnHeadersReceived { get; set; }
     }
 }

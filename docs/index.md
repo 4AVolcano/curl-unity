@@ -20,6 +20,7 @@ libcurl 的 Unity3D 原生封装,通过 P/Invoke 提供 **HTTP/2 + HTTP/3 (QUIC)
 
 - [快速开始](articles/getting-started.md) — 装包、第一个 GET/POST 请求
 - [进阶使用](articles/advanced.md) — 流式上传、multipart、代理、cookie、诊断
+- [Server-Sent Events (SSE)](articles/sse.md) — 事件流读取、自动重连、自定义重连
 - [API 参考](api/index.md) — 所有 public 类型的详细说明
 
 ## 安装
