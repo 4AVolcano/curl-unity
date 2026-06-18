@@ -2,5 +2,7 @@
   href: getting-started.md
 - name: 进阶使用
   href: advanced.md
+- name: Server-Sent Events (SSE)
+  href: sse.md
 - name: 错误处理
   href: error-handling.md
