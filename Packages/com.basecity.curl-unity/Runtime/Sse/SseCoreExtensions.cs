@@ -104,7 +104,7 @@ namespace CurlUnity.Sse
                 BodyStream = src.BodyStream,
                 BodyLength = src.BodyLength,
                 ConnectTimeoutMs = src.ConnectTimeoutMs,
-                TimeoutMs = src.TimeoutMs,
+                TimeoutMs = 0, // SSE 长连接不设整体超时；建连超时由 ConnectTimeoutMs 控制
                 EnableResponseHeaders = src.EnableResponseHeaders,
                 EnableCookies = src.EnableCookies,
                 AutoDecompressResponse = src.AutoDecompressResponse,
