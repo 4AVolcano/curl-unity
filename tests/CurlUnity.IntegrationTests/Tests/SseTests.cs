@@ -38,6 +38,13 @@ namespace CurlUnity.IntegrationTests.Tests
             return await task;
         }
 
+        private static async Task WithTimeout(Task task, int ms = 15000)
+        {
+            if (await Task.WhenAny(task, Task.Delay(ms)) != task)
+                throw new TimeoutException("SSE test timed out");
+            await task;
+        }
+
         [Fact]
         public async Task ReceivesAllEvents_AndConnectionEnds()
         {
@@ -213,6 +220,39 @@ namespace CurlUnity.IntegrationTests.Tests
             await WithTimeout(done.Task);
             Assert.NotEqual(0, cbTid);
             Assert.NotEqual(testTid, cbTid);
+        }
+
+        [Fact]
+        public async Task OpenSse_MaxReconnectAttempts_FaultsCompletion()
+        {
+            // 真实网络下持续 503（不会建立）→ 达到次数上限放弃 → Completion 以 SseReconnectExhaustedException fault
+            var options = new SseConnectionOptions
+            {
+                ReconnectDelayInit = TimeSpan.FromMilliseconds(10),
+                MaxReconnectAttempts = 2,
+            };
+            using var sse = _client.OpenSse(
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse-503", TimeoutMs = 0 },
+                options);
+
+            var ex = await Assert.ThrowsAsync<SseReconnectExhaustedException>(() => WithTimeout(sse.Completion));
+            Assert.Equal(2, ex.AttemptCount);
+            Assert.Equal(SseConnectionState.Closed, sse.State);
+        }
+
+        [Fact]
+        public async Task OpenSse_Completion_GracefulOnDispose()
+        {
+            // 用带回调参数的 race-free 重载在构造期挂回调；Dispose 后 Completion 优雅完成（不 fault）。
+            var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var sse = _client.OpenSse(
+                new HttpRequest { Url = $"{_server.HttpUrl}/sse?count=1000&delayMs=30", TimeoutMs = 0 },
+                onEvent: _ => first.TrySetResult(true));
+
+            await WithTimeout(first.Task);
+            sse.Dispose();
+            await WithTimeout(sse.Completion);
+            Assert.True(sse.Completion.IsCompletedSuccessfully);
         }
     }
 }
