@@ -575,8 +575,7 @@ _collect_ios() {
   # 合并所有静态库 + bridge.o
   libtool -static -o "$out/libcurl_unity.a" \
     "$PREFIX/lib/curl_unity_bridge.o" \
-    $(_all_static_libs) \
-    2>/dev/null
+    $(_all_static_libs)
 
   echo "  -> $out/libcurl_unity.a"
 
