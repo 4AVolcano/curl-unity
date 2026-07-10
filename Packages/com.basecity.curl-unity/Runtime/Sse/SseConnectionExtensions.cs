@@ -58,9 +58,11 @@ namespace CurlUnity.Sse
         /// <summary>
         /// 打开一个带自动重连的 SSE 连接，每轮(重)连前调用 <paramref name="requestFactory"/> 构造请求
         /// ——可在其中 <c>await</c> 刷新 token / 动态构造 URL、headers（async headers 外置，库不碰 token）。
-        /// 工厂返回的 request 不应设置 <see cref="HttpRequest.OnDataReceived"/> 或
-        /// <see cref="HttpRequest.OnHeadersReceived"/>（由 SSE 接管，已设会经 <see cref="ISseConnection.OnError"/>
-        /// 报错并重连）。其余同 <see cref="OpenSse(IHttpClient, HttpRequest, SseConnectionOptions, CancellationToken)"/>。
+        /// 工厂返回 <c>null</c>，或返回的 request 设置了 <see cref="HttpRequest.OnDataReceived"/> /
+        /// <see cref="HttpRequest.OnHeadersReceived"/>（由 SSE 接管），均视为不可重试的配置错误：经
+        /// <see cref="ISseConnection.OnError"/> 报告一次后终止，原始 <see cref="InvalidOperationException"/>
+        /// 通过 <see cref="ISseConnection.Completion"/> fault 暴露。其余同
+        /// <see cref="OpenSse(IHttpClient, HttpRequest, SseConnectionOptions, CancellationToken)"/>。
         /// </summary>
         public static ISseConnection OpenSse(this IHttpClient client,
             Func<CancellationToken, Task<HttpRequest>> requestFactory,
@@ -93,12 +95,8 @@ namespace CurlUnity.Sse
         {
             if (client == null) throw new ArgumentNullException(nameof(client));
             if (request == null) throw new ArgumentNullException(nameof(request));
-            if (request.OnDataReceived != null)
-                throw new InvalidOperationException(
-                    "SSE 需接管响应流式回调；请勿在传入的 request 上设置 OnDataReceived。");
-            if (request.OnHeadersReceived != null)
-                throw new InvalidOperationException(
-                    "SSE 需接管 OnHeadersReceived（用于非 2xx 快速失败）；请勿在传入的 request 上设置 OnHeadersReceived。");
+            var configurationError = SseCoreExtensions.GetRequestConfigurationError(request);
+            if (configurationError != null) throw configurationError;
         }
     }
 }

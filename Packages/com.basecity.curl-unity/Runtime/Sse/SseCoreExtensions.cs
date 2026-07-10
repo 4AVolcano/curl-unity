@@ -79,12 +79,8 @@ namespace CurlUnity.Sse
             Action<SseEvent> onEvent, Action onByteReceived, CancellationToken ct,
             string lastEventId = null)
         {
-            if (request.OnDataReceived != null)
-                throw new InvalidOperationException(
-                    "SSE 需接管响应流式回调；请勿在传入的 request 上设置 OnDataReceived。");
-            if (request.OnHeadersReceived != null)
-                throw new InvalidOperationException(
-                    "SSE 需接管 OnHeadersReceived（用于非 2xx 快速失败）；请勿在传入的 request 上设置 OnHeadersReceived。");
+            var configurationError = GetRequestConfigurationError(request);
+            if (configurationError != null) throw configurationError;
 
             var sseRequest = CloneForSse(request, lastEventId);
             sseRequest.OnHeadersReceived = resp =>
@@ -98,6 +94,19 @@ namespace CurlUnity.Sse
                 parser.Feed(buf, offset, len, onEvent);
             };
             return client.SendAsync(sseRequest, ct);
+        }
+
+        internal static InvalidOperationException GetRequestConfigurationError(HttpRequest request)
+        {
+            if (request == null)
+                return new InvalidOperationException("SSE 请求不能为 null；requestFactory 不得返回 null。");
+            if (request.OnDataReceived != null)
+                return new InvalidOperationException(
+                    "SSE 需接管响应流式回调；请勿在传入的 request 上设置 OnDataReceived。");
+            if (request.OnHeadersReceived != null)
+                return new InvalidOperationException(
+                    "SSE 需接管 OnHeadersReceived（用于非 2xx 快速失败）；请勿在传入的 request 上设置 OnHeadersReceived。");
+            return null;
         }
 
         /// <summary>复制为新的 <see cref="HttpRequest"/>，缺省补 Accept 与（可选）Last-Event-ID，不改动调用方对象。</summary>

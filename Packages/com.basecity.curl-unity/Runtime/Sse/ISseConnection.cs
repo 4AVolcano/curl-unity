@@ -36,7 +36,8 @@ namespace CurlUnity.Sse
         ///   <item><b>Faulted</b>（<see cref="SseReconnectExhaustedException"/>）：达到
         ///   <see cref="SseConnectionOptions.MaxReconnectAttempts"/> /
         ///   <see cref="SseConnectionOptions.MaxElapsedReconnectTime"/> 上限而放弃。</item>
-        ///   <item><b>Faulted</b>（原始异常）：某个用户回调抛出，或后台循环遇到未预期异常。</item>
+        ///   <item><b>Faulted</b>（原始异常）：requestFactory 返回非法 SSE 请求、某个用户回调抛出，
+        ///   或后台循环遇到未预期异常。</item>
         /// </list>
         /// 单次连接的失败<b>不会</b>完成本任务（仍会重连，错误经 <see cref="OnError"/> 报告）。
         /// </summary>
@@ -46,8 +47,9 @@ namespace CurlUnity.Sse
         event Action<SseEvent> OnEvent;
 
         /// <summary>
-        /// 连接错误触发（随后自动重连）。后台线程。常见类型：网络/TLS/超时 <c>CurlHttpException</c>、
-        /// 非 2xx <see cref="SseHttpStatusException"/>、空闲超时 <see cref="System.TimeoutException"/>。
+        /// 连接错误触发。后台线程。网络/TLS/超时 <c>CurlHttpException</c>、非 2xx
+        /// <see cref="SseHttpStatusException"/>、空闲超时 <see cref="System.TimeoutException"/> 随后按策略重连；
+        /// requestFactory 返回非法 SSE 请求时仅触发一次，随后连接终止。
         /// </summary>
         event Action<Exception> OnError;
 
