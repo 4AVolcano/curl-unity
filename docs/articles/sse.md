@@ -159,6 +159,7 @@ while (!ct.IsCancellationRequested)
     {
         Url = url,
         Headers = headers,
+        // 借用的 buffer 在回调内同步消费，不保存到回调之外
         OnDataReceived = (b, o, l) => parser.Feed(b, o, l, OnEvent),
     };
     try { using var _ = await client.SendAsync(req, ct); }
