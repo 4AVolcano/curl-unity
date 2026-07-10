@@ -58,7 +58,7 @@ namespace CurlUnity.Sse
         /// <summary>
         /// 打开一个带自动重连的 SSE 连接，每轮(重)连前调用 <paramref name="requestFactory"/> 构造请求
         /// ——可在其中 <c>await</c> 刷新 token / 动态构造 URL、headers（async headers 外置，库不碰 token）。
-        /// 工厂返回 <c>null</c>，或返回的 request 设置了 <see cref="HttpRequest.OnDataReceived"/> /
+        /// 工厂返回 <c>null</c> Task / request，或返回的 request 设置了 <see cref="HttpRequest.OnDataReceived"/> /
         /// <see cref="HttpRequest.OnHeadersReceived"/>（由 SSE 接管），均视为不可重试的配置错误：经
         /// <see cref="ISseConnection.OnError"/> 报告一次后终止，原始 <see cref="InvalidOperationException"/>
         /// 通过 <see cref="ISseConnection.Completion"/> fault 暴露。其余同

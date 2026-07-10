@@ -128,7 +128,17 @@ namespace CurlUnity.Sse
                     {
                         _parser.Reset(); // 清上一连接半行/半事件/BOM（保留 LastEventId/Retry）
 
-                        var request = await _requestFactory(_linkedCt.Token).ConfigureAwait(false);
+                        var requestTask = _requestFactory(_linkedCt.Token);
+                        if (_linkedCt.IsCancellationRequested) break;
+                        if (requestTask == null)
+                        {
+                            terminalError = new InvalidOperationException(
+                                "SSE requestFactory 不能返回 null Task。");
+                            RaiseError(terminalError);
+                            break;
+                        }
+
+                        var request = await requestTask.ConfigureAwait(false);
                         if (_linkedCt.IsCancellationRequested) break;
                         var configurationError = SseCoreExtensions.GetRequestConfigurationError(request);
                         if (configurationError != null)

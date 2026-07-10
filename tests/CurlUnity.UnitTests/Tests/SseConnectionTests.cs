@@ -388,6 +388,33 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task RequestFactory_ReturnsNullTask_FaultsWithoutReconnect()
+        {
+            int factoryCalls = 0;
+            var errors = new List<Exception>();
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+            var options = ZeroDelay();
+            options.MaxReconnectAttempts = 2;
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return null;
+            }
+
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => conn.Completion);
+
+            Assert.Contains("Task", ex.Message);
+            Assert.Equal(1, Volatile.Read(ref factoryCalls));
+            Assert.Equal(0, client.CallCount);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+            lock (errors) Assert.Same(ex, Assert.Single(errors));
+        }
+
+        [Fact]
         public async Task RequestFactory_ThrowsInvalidOperationException_StillReconnects()
         {
             int factoryCalls = 0;

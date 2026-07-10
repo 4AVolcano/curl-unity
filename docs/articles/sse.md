@@ -76,7 +76,7 @@ using var sse = client.OpenSse(async ct =>
 }, onEvent: e => Handle(e), options: options);
 ```
 
-工厂返回 `null`，或返回已设置 `OnDataReceived` / `OnHeadersReceived` 的请求，属于不可重试的配置错误：`OnError` 只报告一次，随后连接直接进入 `Closed`，`Completion` 以原始 `InvalidOperationException` fault。此类错误不经过 `ShouldReconnect`，也不会再次调用工厂。
+工厂返回 `null` Task / request，或返回已设置 `OnDataReceived` / `OnHeadersReceived` 的请求，属于不可重试的配置错误：`OnError` 只报告一次，随后连接直接进入 `Closed`，`Completion` 以原始 `InvalidOperationException` fault。此类错误不经过 `ShouldReconnect`，也不会再次调用工厂。
 
 要点：缺省自动注入 `Last-Event-ID`（取自已确认 id）；非 2xx 经 `OnError` 收到 `SseHttpStatusException`、空闲超时收到 `TimeoutException`、网络错收到 `CurlHttpException`，随后都自动重连；**`204 No Content` 视为服务端要求停止，直接关闭、不重连**；`Dispose()` 取消在飞请求、停止重连、状态置 `Closed`。**回调全在后台线程，调用方自行 marshal 到主线程，且回调内不应抛异常（见下「终止与可观测性」）。**
 
