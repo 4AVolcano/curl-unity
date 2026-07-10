@@ -65,7 +65,7 @@ namespace CurlUnity.IntegrationTests.Tests
     }
 
     /// <summary>
-    /// HTTP/3 tests against external h3-test server.
+    /// HTTP/3 tests against Cloudflare's external QUIC test server.
     /// Skipped automatically when network is unavailable.
     /// Run with: dotnet test --filter "Category=Network"
     /// Exclude with: dotnet test --filter "Category!=Network"
@@ -74,7 +74,7 @@ namespace CurlUnity.IntegrationTests.Tests
     [Trait("Category", "Network")]
     public class Http3Tests : IDisposable
     {
-        private const string H3TestUrl = "https://h3-test.godrive.top/";
+        private const string H3TestUrl = "https://cloudflare-quic.com/cdn-cgi/trace";
         private readonly CurlHttpClient _client;
 
         public Http3Tests(CurlGlobalFixture _)
@@ -85,7 +85,7 @@ namespace CurlUnity.IntegrationTests.Tests
         public void Dispose() => _client.Dispose();
 
         /// <summary>
-        /// 有界检查网络是否可达 H3TestHost:443。避免 DNS/TCP 握手 stall 导致测试挂起。
+        /// 有界检查网络是否可达 Cloudflare QUIC test host:443。避免 DNS/TCP 握手 stall 导致测试挂起。
         /// 返回 true/false；报告为 Skipped 由调用方用 Skip.IfNot 处理。
         /// </summary>
         private static async Task<bool> IsNetworkAvailableAsync()
@@ -94,7 +94,7 @@ namespace CurlUnity.IntegrationTests.Tests
             {
                 using var tcp = new TcpClient();
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                await tcp.ConnectAsync("h3-test.godrive.top", 443, cts.Token);
+                await tcp.ConnectAsync("cloudflare-quic.com", 443, cts.Token);
                 return true;
             }
             catch { return false; }
@@ -103,7 +103,7 @@ namespace CurlUnity.IntegrationTests.Tests
         [SkippableFact]
         public async Task Http3Only_ConnectsViaQuic()
         {
-            Skip.IfNot(await IsNetworkAvailableAsync(), "h3-test.godrive.top unreachable");
+            Skip.IfNot(await IsNetworkAvailableAsync(), "cloudflare-quic.com unreachable");
 
             _client.PreferredVersion = HttpVersion.Http3Only;
 
@@ -113,13 +113,13 @@ namespace CurlUnity.IntegrationTests.Tests
             Assert.Equal(HttpVersion.Http3, resp.Version);
 
             var body = Encoding.UTF8.GetString(resp.Body);
-            Assert.StartsWith("proto=HTTP/3", body);
+            Assert.Contains("http=http/3", body);
         }
 
         [SkippableFact]
         public async Task PreferH3_NegotiatesToHttp3()
         {
-            Skip.IfNot(await IsNetworkAvailableAsync(), "h3-test.godrive.top unreachable");
+            Skip.IfNot(await IsNetworkAvailableAsync(), "cloudflare-quic.com unreachable");
 
             _client.PreferredVersion = HttpVersion.PreferH3;
 
@@ -132,13 +132,15 @@ namespace CurlUnity.IntegrationTests.Tests
 
             var body = Encoding.UTF8.GetString(resp2.Body);
             // Should be HTTP/3 after Alt-Svc discovery, but HTTP/2 is also acceptable
-            Assert.StartsWith("proto=HTTP/", body);
+            Assert.True(resp2.Version == HttpVersion.Http3 || resp2.Version == HttpVersion.Http2,
+                $"Expected HTTP/3 or HTTP/2, got {resp2.Version}");
+            Assert.Contains(resp2.Version == HttpVersion.Http3 ? "http=http/3" : "http=http/2", body);
         }
 
         [SkippableFact]
         public async Task Http2_FallbackWorks()
         {
-            Skip.IfNot(await IsNetworkAvailableAsync(), "h3-test.godrive.top unreachable");
+            Skip.IfNot(await IsNetworkAvailableAsync(), "cloudflare-quic.com unreachable");
 
             _client.PreferredVersion = HttpVersion.Http2;
 
@@ -148,7 +150,7 @@ namespace CurlUnity.IntegrationTests.Tests
             Assert.Equal(HttpVersion.Http2, resp.Version);
 
             var body = Encoding.UTF8.GetString(resp.Body);
-            Assert.StartsWith("proto=HTTP/2", body);
+            Assert.Contains("http=http/2", body);
         }
     }
 }

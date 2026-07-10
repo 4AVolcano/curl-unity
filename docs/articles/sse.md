@@ -105,8 +105,14 @@ using var sse = client.OpenSse(async ct =>
 | `MaxReconnectAttempts` | 连续失败达该次数即放弃（建立成功清零） | `0`（不限） |
 | `MaxElapsedReconnectTime` | 自首次失败起累计重连耗时超过即放弃 | `null`（不限） |
 | `ShouldReconnect` | `Func<Exception,bool>`，自定义是否重连（干净 EOF 入参为 `null`；返回 `false` 优雅停止） | `null`（始终重连） |
+| `MaxLineBytes` | 单行字节数上限（反恶意服务端 OOM），超限本轮以 `InvalidDataException` 失败 | 1 MiB |
+| `MaxEventDataChars` | 单事件累积 `data` 上限（UTF-16 char），语义同上 | 4M chars |
 
 > `204` 始终终止，不经过 `ShouldReconnect`。
+>
+> 解析器防护上限与其它护栏不同，**默认启用**（无界缓冲等于把 OOM 决定权交给对端）。注意超限
+> 是可重复的确定性失败：若服务端持续推送同一超大事件，默认策略会反复重连并再次失败，
+> 需要停下来请配合 `ShouldReconnect`（判 `InvalidDataException`）或调大上限。
 
 ### 终止与可观测性（Completion）
 

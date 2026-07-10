@@ -59,19 +59,50 @@ namespace CurlUnity.Http
         /// <summary>诊断统计。构造时 enableDiagnostics=true 才可用，否则为 null。</summary>
         public HttpDiagnostics Diagnostics { get; }
 
+        /// <summary>构造参数 <c>maxTotalConnections</c> 的默认值。</summary>
+        public const int DefaultMaxTotalConnections = CurlMulti.DefaultMaxTotalConnections;
+
+        /// <summary>构造参数 <c>maxHostConnections</c> 的默认值。</summary>
+        public const int DefaultMaxHostConnections = CurlMulti.DefaultMaxHostConnections;
+
+        /// <summary>使用默认连接数上限创建 client。</summary>
+        /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
         public CurlHttpClient(bool enableDiagnostics = false)
-            : this(CurlNativeApi.Instance, enableDiagnostics)
+            : this(CurlNativeApi.Instance, enableDiagnostics,
+                DefaultMaxTotalConnections, DefaultMaxHostConnections)
         {
         }
 
-        internal CurlHttpClient(ICurlApi api, bool enableDiagnostics = false)
+        /// <param name="maxTotalConnections">本 client 同时保持的连接总数上限
+        /// （<c>CURLMOPT_MAX_TOTAL_CONNECTIONS</c>）。超出的传输由 libcurl 内部排队等
+        /// 空闲连接，不会失败。0 = 不限（libcurl 默认，不推荐——并发请求一多就会无上限
+        /// 开 socket）。默认 <see cref="DefaultMaxTotalConnections"/>。</param>
+        /// <param name="maxHostConnections">对单个 host 的连接数上限
+        /// （<c>CURLMOPT_MAX_HOST_CONNECTIONS</c>）。0 = 不限。
+        /// 默认 <see cref="DefaultMaxHostConnections"/>。</param>
+        /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
+        public CurlHttpClient(int maxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections, maxHostConnections)
+        {
+        }
+
+        internal CurlHttpClient(ICurlApi api, bool enableDiagnostics = false,
+            int maxTotalConnections = DefaultMaxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            // 参数校验放在 CurlGlobal.Acquire 之前：校验抛出时全局引用计数不受影响。
+            if (maxTotalConnections < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
+            if (maxHostConnections < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxHostConnections), "必须 >= 0（0 = 不限）");
             CurlGlobal.Acquire(_api);
             CurlCerts.Initialize();
             if (enableDiagnostics)
                 Diagnostics = new HttpDiagnostics();
-            _worker = new CurlBackgroundWorker(_api);
+            _worker = new CurlBackgroundWorker(_api, maxTotalConnections, maxHostConnections);
             _worker.Start();
         }
 

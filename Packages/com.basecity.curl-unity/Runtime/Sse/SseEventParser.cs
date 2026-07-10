@@ -19,9 +19,12 @@ namespace CurlUnity.Sse
     /// </list>
     /// 非线程安全：约定由单一线程 (流式回调线程) 顺序调用。
     /// <para>
-    /// <b>行长无上限</b>：按规范，单行可以任意长。本解析器会把未遇到行终止符的字节一直缓冲，
-    /// 内存随之增长；逼近运行时数组上限 (<see cref="MaxLineCapacity"/>) 时抛
-    /// <see cref="InvalidDataException"/>。需要更早的防护请在传输层/上层限制输入。
+    /// <b>输入是不可信的</b>：SSE 流来自网络对端。规范虽然允许单行/单事件任意长，但无界缓冲
+    /// 意味着一个恶意（或损坏）的服务端只要一直不发行终止符/空行，就能让客户端内存无限增长
+    /// 直至 OOM——对移动设备这是可远程触发的拒绝服务。因此本解析器默认启用防护上限：
+    /// 单行缓冲超过 <see cref="MaxLineBytes"/>（默认 1 MiB）或单事件累积 <c>data</c> 超过
+    /// <see cref="MaxEventDataChars"/>（默认 4M chars）即抛 <see cref="InvalidDataException"/>。
+    /// 确有超大事件的场景可显式调大两个上限。
     /// </para>
     /// </remarks>
     public sealed class SseEventParser
@@ -30,6 +33,45 @@ namespace CurlUnity.Sse
 
         // netstandard2.1 无 Array.MaxLength，用 byte[] 的运行时上限常量（与 .NET 6+ Array.MaxLength 同值）
         private const int MaxLineCapacity = 0x7FFFFFC7;
+
+        /// <summary><see cref="MaxLineBytes"/> 的默认值（1 MiB）。</summary>
+        public const int DefaultMaxLineBytes = 1024 * 1024;
+
+        /// <summary><see cref="MaxEventDataChars"/> 的默认值（4M UTF-16 chars ≈ 8 MiB 内存）。</summary>
+        public const int DefaultMaxEventDataChars = 4 * 1024 * 1024;
+
+        private int _maxLineBytes = DefaultMaxLineBytes;
+        private int _maxEventDataChars = DefaultMaxEventDataChars;
+
+        /// <summary>
+        /// 单行原始字节数上限（防护恶意/损坏服务端造成的无界缓冲，见类注释）。
+        /// 超限时 <see cref="Feed"/> 抛 <see cref="InvalidDataException"/>。必须为正。
+        /// </summary>
+        public int MaxLineBytes
+        {
+            get => _maxLineBytes;
+            set
+            {
+                if (value <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), "MaxLineBytes 必须为正。");
+                _maxLineBytes = value;
+            }
+        }
+
+        /// <summary>
+        /// 单个事件累积 <c>data</c> 的上限，单位为 UTF-16 char（内存占用约为 2 倍字节数）。
+        /// 超限时 <see cref="Feed"/> 抛 <see cref="InvalidDataException"/>。必须为正。
+        /// </summary>
+        public int MaxEventDataChars
+        {
+            get => _maxEventDataChars;
+            set
+            {
+                if (value <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(value), "MaxEventDataChars 必须为正。");
+                _maxEventDataChars = value;
+            }
+        }
 
         // —— 字节层 ——
         private byte[] _lineBuf = new byte[256]; // 当前未完成行的原始字节
@@ -62,7 +104,8 @@ namespace CurlUnity.Sse
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="buffer"/> 或 <paramref name="onEvent"/> 为 null。</exception>
         /// <exception cref="ArgumentOutOfRangeException"><paramref name="offset"/>/<paramref name="count"/> 超出 <paramref name="buffer"/> 范围。</exception>
-        /// <exception cref="InvalidDataException">单行长度超过运行时上限（通常意味着对端一直不发行终止符）。</exception>
+        /// <exception cref="InvalidDataException">单行超过 <see cref="MaxLineBytes"/>，或单事件累积
+        /// <c>data</c> 超过 <see cref="MaxEventDataChars"/>（通常意味着对端恶意或损坏）。</exception>
         public void Feed(byte[] buffer, int offset, int count, Action<SseEvent> onEvent)
         {
             if (buffer == null) throw new ArgumentNullException(nameof(buffer));
@@ -139,6 +182,10 @@ namespace CurlUnity.Sse
 
         private void AppendByte(byte b)
         {
+            if (_lineLen >= _maxLineBytes)
+                throw new InvalidDataException(
+                    $"SSE 单行超过 MaxLineBytes={_maxLineBytes} 字节上限（对端一直不发行终止符？"
+                    + "确为超大行请调大 SseEventParser.MaxLineBytes / SseConnectionOptions.MaxLineBytes）");
             if (_lineLen == _lineBuf.Length)
                 GrowLineBuffer();
             _lineBuf[_lineLen++] = b;
@@ -146,11 +193,10 @@ namespace CurlUnity.Sse
 
         private void GrowLineBuffer()
         {
-            if (_lineBuf.Length >= MaxLineCapacity)
-                throw new InvalidDataException(
-                    $"SSE 单行超过 {MaxLineCapacity} 字节上限（对端缺少行终止符？）");
-            // long 乘法防止 int 溢出；逼近上限时 clamp 到 MaxLineCapacity
-            int newCap = (int)Math.Min((long)_lineBuf.Length * 2, MaxLineCapacity);
+            // 仅在 _lineLen < _maxLineBytes 时会走到这里（触顶由 AppendByte 抛错），
+            // 故 cap > 当前容量恒成立，这里只负责不超配。long 乘法防止 int 溢出。
+            int cap = (int)Math.Min(_maxLineBytes, MaxLineCapacity);
+            int newCap = (int)Math.Min((long)_lineBuf.Length * 2, cap);
             Array.Resize(ref _lineBuf, newCap);
         }
 
@@ -187,6 +233,12 @@ namespace CurlUnity.Sse
             switch (field)
             {
                 case "data":
+                    // +1 是行尾追加的 '\n'。先查后加，保证 _dataBuffer 永远不越过上限。
+                    if (_dataBuffer.Length > _maxEventDataChars - value.Length - 1)
+                        throw new InvalidDataException(
+                            $"SSE 单事件累积 data 超过 MaxEventDataChars={_maxEventDataChars} 上限"
+                            + "（对端一直不发空行 dispatch？确为超大事件请调大 "
+                            + "SseEventParser.MaxEventDataChars / SseConnectionOptions.MaxEventDataChars）");
                     _dataBuffer.Append(value).Append('\n');
                     _dataPresent = true;
                     break;

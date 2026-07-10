@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using CurlUnity.Sse;
 using Xunit;
@@ -314,6 +315,65 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Equal(2, events.Count);
             Assert.Equal("a", events[0].Data);
             Assert.Equal("b", events[1].Data); // 第二条流的 BOM 也被剥离
+        }
+
+        // ================================================================
+        // 防护上限（反恶意服务端 OOM）
+        // ================================================================
+
+        [Fact]
+        public void LineExceedingMaxLineBytes_ThrowsInvalidDataException()
+        {
+            var parser = new SseEventParser { MaxLineBytes = 64 };
+            var chunk = Encoding.UTF8.GetBytes(new string('a', 65)); // 无行终止符
+            Assert.Throws<InvalidDataException>(
+                () => parser.Feed(chunk, 0, chunk.Length, _ => { }));
+        }
+
+        [Fact]
+        public void LineAtExactlyMaxLineBytes_Parses()
+        {
+            // 上限是"缓冲字节数"而非行长减一：正好 64 字节的行（终止符不入缓冲）应成功
+            var parser = new SseEventParser { MaxLineBytes = 64 };
+            var events = new List<SseEvent>();
+            var line = "data: " + new string('a', 58); // 6 + 58 = 64 字节
+            var chunk = Encoding.UTF8.GetBytes(line + "\n\n");
+            parser.Feed(chunk, 0, chunk.Length, events.Add);
+            Assert.Equal(new string('a', 58), Assert.Single(events).Data);
+        }
+
+        [Fact]
+        public void EventDataExceedingMaxEventDataChars_ThrowsInvalidDataException()
+        {
+            // 每行都在 MaxLineBytes 内，但一直不发空行 dispatch → 累积 data 触顶
+            var parser = new SseEventParser { MaxEventDataChars = 100 };
+            var line = Encoding.UTF8.GetBytes("data: " + new string('a', 40) + "\n");
+            parser.Feed(line, 0, line.Length, _ => { }); // 41 chars 累积 (40 + '\n')
+            parser.Feed(line, 0, line.Length, _ => { }); // 82
+            Assert.Throws<InvalidDataException>(
+                () => parser.Feed(line, 0, line.Length, _ => { })); // 123 > 100
+        }
+
+        [Fact]
+        public void MaxLimits_MustBePositive()
+        {
+            var parser = new SseEventParser();
+            Assert.Throws<ArgumentOutOfRangeException>(() => parser.MaxLineBytes = 0);
+            Assert.Throws<ArgumentOutOfRangeException>(() => parser.MaxLineBytes = -1);
+            Assert.Throws<ArgumentOutOfRangeException>(() => parser.MaxEventDataChars = 0);
+            Assert.Throws<ArgumentOutOfRangeException>(() => parser.MaxEventDataChars = -1);
+        }
+
+        [Fact]
+        public void DispatchResetsDataBudget_LongStreamOfNormalEventsIsUnaffected()
+        {
+            // 上限约束的是"单个事件"，跨事件不累计：小上限下持续解析大量正常事件不受影响
+            var parser = new SseEventParser { MaxEventDataChars = 32 };
+            var events = new List<SseEvent>();
+            var chunk = Encoding.UTF8.GetBytes("data: hello\n\n");
+            for (int i = 0; i < 1000; i++)
+                parser.Feed(chunk, 0, chunk.Length, events.Add);
+            Assert.Equal(1000, events.Count);
         }
     }
 }

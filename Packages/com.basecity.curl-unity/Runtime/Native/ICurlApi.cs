@@ -36,6 +36,8 @@ namespace CurlUnity.Native
 
         IntPtr MultiInit();
         int MultiCleanup(IntPtr multi);
+        /// <summary><c>curl_multi_setopt</c>（long 型选项）。返回 <c>CURLMcode</c>。</summary>
+        int MultiSetOptLong(IntPtr multi, int option, long value);
         int MultiAddHandle(IntPtr multi, IntPtr easy);
         int MultiRemoveHandle(IntPtr multi, IntPtr easy);
         int MultiPerform(IntPtr multi, out int runningHandles);

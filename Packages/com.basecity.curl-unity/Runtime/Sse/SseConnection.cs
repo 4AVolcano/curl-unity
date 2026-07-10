@@ -58,6 +58,10 @@ namespace CurlUnity.Sse
             _options = options ?? new SseConnectionOptions();
             ValidateOptions(_options); // 非法配置 fail-fast，避免循环里静默关闭/反复报错
 
+            // 解析器防护上限（setter 自带正数校验，非法值在此 fail-fast）
+            _parser.MaxLineBytes = _options.MaxLineBytes;
+            _parser.MaxEventDataChars = _options.MaxEventDataChars;
+
             // 构造期挂回调：在后台循环启动前完成订阅，从源头消除 construct-then-subscribe 竞态
             // （后续仍可用 OnEvent/OnError/OnStateChanged 的 += 追加订阅）。
             if (onEvent != null) OnEvent += onEvent;
