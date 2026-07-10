@@ -6,7 +6,7 @@ namespace CurlUnity.Sse
 {
     /// <summary>
     /// Layer 2 重连便利层（<see cref="SseConnectionExtensions.OpenSse"/>）的策略配置。
-    /// 只含工程策略字段，<b>不含请求字段</b>——请求仍用 <see cref="Http.IHttpRequest"/>。
+    /// 只含工程策略字段，<b>不含请求字段</b>——请求仍用 <see cref="Http.HttpRequest"/>。
     /// <para>
     /// 所有字段的默认值组合等价于 <c>EventSource</c> 风格的<b>无限重连</b>：固定基准退避（默认
     /// <c>t*2</c> clamp 到 [1s,32s]）、不抖动、不封顶次数/时长、收到任意字节即视为已建立并重置退避。

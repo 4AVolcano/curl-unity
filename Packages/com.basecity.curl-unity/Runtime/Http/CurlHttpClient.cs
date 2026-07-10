@@ -22,7 +22,7 @@ namespace CurlUnity.Http
     /// 注意 HTTP/3 无法经 HTTP 代理隧道化，启用代理后 libcurl 会回退到 HTTP/2。
     /// </para>
     /// <para>
-    /// <b>Cookie 行为：</b><see cref="IHttpRequest.EnableCookies"/> 为 <c>true</c>
+    /// <b>Cookie 行为：</b><see cref="HttpRequest.EnableCookies"/> 为 <c>true</c>
     /// 的请求接入本 client 的 cookie jar（基于 <c>CURLSH</c>），跨请求持久化。
     /// 不同 <c>CurlHttpClient</c> 实例各自持有独立 jar，互不共享。<c>EnableCookies=false</c>
     /// 的请求既不读也不写 jar。jar 为纯内存存储，client Dispose 后清空。
@@ -50,7 +50,7 @@ namespace CurlUnity.Http
         public bool Verbose { get; set; } = false;
 
         /// <summary>
-        /// 默认 User-Agent。对所有请求生效;请求级 <see cref="IHttpRequest.Headers"/>
+        /// 默认 User-Agent。对所有请求生效;请求级 <see cref="HttpRequest.Headers"/>
         /// 里设 <c>User-Agent</c> 会覆盖本值(libcurl slist 优先于 CURLOPT_USERAGENT)。
         /// 默认 <c>"CurlUnity/0.1.0"</c>。设为 <c>null</c> 或空不覆盖 libcurl 默认。
         /// </summary>
@@ -118,7 +118,7 @@ namespace CurlUnity.Http
             _proxy = null;
         }
 
-        public Task<IHttpResponse> SendAsync(IHttpRequest request, CancellationToken ct = default)
+        public Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct = default)
         {
             if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
 
@@ -307,7 +307,7 @@ namespace CurlUnity.Http
             }
         }
 
-        private CurlRequest BuildCurlRequest(IHttpRequest request)
+        private CurlRequest BuildCurlRequest(HttpRequest request)
         {
             if (request == null)
                 throw new ArgumentNullException(nameof(request));
@@ -327,7 +327,7 @@ namespace CurlUnity.Http
             }
         }
 
-        private void ConfigureCurlRequest(CurlRequest curlReq, IHttpRequest request)
+        private void ConfigureCurlRequest(CurlRequest curlReq, HttpRequest request)
         {
             var h = curlReq.Handle;
 
@@ -363,7 +363,7 @@ namespace CurlUnity.Http
 
             // TCP keep-alive：SSE 等长连接内部开启（HttpRequest 内部字段，不对外暴露）。
             // 不处理 Nagle：libcurl 默认 TCP_NODELAY=1（Nagle 已关），无需设置。
-            if (request is HttpRequest hr && hr.TcpKeepAlive)
+            if (request.TcpKeepAlive)
                 CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
 
             // CURLOPT_VERBOSE = 41 (CURLOPTTYPE_LONG + 41)。诊断用,默认关。
@@ -537,7 +537,7 @@ namespace CurlUnity.Http
 
             // Follow redirects（可按请求关闭；MaxRedirects 防重定向环，超限以
             // CURLE_TOO_MANY_REDIRECTS 失败）。注意 libcurl 跟随时会把自定义
-            // header（含 Authorization）发给跨主机重定向目标，见 IHttpRequest 文档。
+            // header（含 Authorization）发给跨主机重定向目标，见 HttpRequest 文档。
             if (request.MaxRedirects < -1)
                 throw new ArgumentOutOfRangeException(
                     nameof(request.MaxRedirects), "MaxRedirects 仅允许 >= -1（-1 = 不限制）");

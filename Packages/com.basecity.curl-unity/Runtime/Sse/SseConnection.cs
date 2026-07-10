@@ -19,7 +19,7 @@ namespace CurlUnity.Sse
     internal sealed class SseConnection : ISseConnection
     {
         private readonly IHttpClient _client;
-        private readonly Func<CancellationToken, Task<IHttpRequest>> _requestFactory;
+        private readonly Func<CancellationToken, Task<HttpRequest>> _requestFactory;
         private readonly SseConnectionOptions _options;
         private readonly SseEventParser _parser = new SseEventParser();
         private readonly Func<double> _rng;
@@ -46,7 +46,7 @@ namespace CurlUnity.Sse
         public Task Completion => _completion.Task;
 
         internal SseConnection(IHttpClient client,
-            Func<CancellationToken, Task<IHttpRequest>> requestFactory,
+            Func<CancellationToken, Task<HttpRequest>> requestFactory,
             SseConnectionOptions options, CancellationToken ct,
             Action<SseEvent> onEvent = null,
             Action<Exception> onError = null,

@@ -7,7 +7,7 @@ using CurlUnity.Http;
 namespace CurlUnity.Sse
 {
     /// <summary>
-    /// Server-Sent Events 核心入口（Layer 1）：在一个 <see cref="IHttpRequest"/> 上读取一段
+    /// Server-Sent Events 核心入口（Layer 1）：在一个 <see cref="HttpRequest"/> 上读取一段
     /// SSE 连接，把响应体增量解析成 <see cref="SseEvent"/>，连接结束即返回。
     /// <b>不重连</b>——重连/退避/心跳等工程策略由上层组合（参见解析器 <see cref="SseEventParser"/>，
     /// 可与 <see cref="IHttpClient.SendAsync"/> 自行编排）。
@@ -29,31 +29,31 @@ namespace CurlUnity.Sse
         /// <c>Accept: text/event-stream</c>（用户已提供 Accept 则不覆盖）。
         /// </para>
         /// <para>
-        /// 非 2xx 状态码在 body 到达前通过 <see cref="IHttpRequest.OnHeadersReceived"/>
+        /// 非 2xx 状态码在 body 到达前通过 <see cref="HttpRequest.OnHeadersReceived"/>
         /// 以 <see cref="SseHttpStatusException"/> 抛出，不会解析无效的事件流。
         /// 2xx 响应正常返回 <see cref="IHttpResponse"/>（含 204）。
         /// 网络/TLS/超时抛 <c>CurlHttpException</c>，取消抛 <see cref="OperationCanceledException"/>。
         /// SSE 长连接建议在 request 上设
-        /// <see cref="IHttpRequest.TimeoutMs"/>=0；本方法内部已为该连接开启 TCP keep-alive。
+        /// <see cref="HttpRequest.TimeoutMs"/>=0；本方法内部已为该连接开启 TCP keep-alive。
         /// </para>
         /// <para>
         /// 内部解析器启用默认防护上限（单行 <see cref="SseEventParser.DefaultMaxLineBytes"/>、
         /// 单事件 <see cref="SseEventParser.DefaultMaxEventDataChars"/>），超限以
         /// <see cref="System.IO.InvalidDataException"/> 结束本次读取；需要调整上限请改用
-        /// <see cref="SseConnectionExtensions.OpenSse(IHttpClient, IHttpRequest, SseConnectionOptions, System.Threading.CancellationToken)"/>
+        /// <see cref="SseConnectionExtensions.OpenSse(IHttpClient, HttpRequest, SseConnectionOptions, System.Threading.CancellationToken)"/>
         /// 并配置 <see cref="SseConnectionOptions.MaxLineBytes"/> / <see cref="SseConnectionOptions.MaxEventDataChars"/>，
         /// 或自行组合 <see cref="SseEventParser"/>。
         /// </para>
         /// </remarks>
         /// <exception cref="InvalidOperationException">
-        /// <paramref name="request"/> 已设置 <see cref="IHttpRequest.OnDataReceived"/>
-        /// 或 <see cref="IHttpRequest.OnHeadersReceived"/>（SSE 需接管这两个回调）。
+        /// <paramref name="request"/> 已设置 <see cref="HttpRequest.OnDataReceived"/>
+        /// 或 <see cref="HttpRequest.OnHeadersReceived"/>（SSE 需接管这两个回调）。
         /// </exception>
         /// <exception cref="SseHttpStatusException">
         /// 服务端返回非 2xx HTTP 状态码。
         /// </exception>
         public static Task<IHttpResponse> ReadServerSentEventsAsync(
-            this IHttpClient client, IHttpRequest request,
+            this IHttpClient client, HttpRequest request,
             Action<SseEvent> onEvent, CancellationToken ct = default)
         {
             if (client == null) throw new ArgumentNullException(nameof(client));
@@ -75,7 +75,7 @@ namespace CurlUnity.Sse
         /// <paramref name="onByteReceived"/> 在每块字节到达时回调（上层做空闲/心跳计时，本层可传 null）。
         /// </summary>
         internal static Task<IHttpResponse> RunOneConnectionAsync(
-            IHttpClient client, IHttpRequest request, SseEventParser parser,
+            IHttpClient client, HttpRequest request, SseEventParser parser,
             Action<SseEvent> onEvent, Action onByteReceived, CancellationToken ct,
             string lastEventId = null)
         {
@@ -101,7 +101,7 @@ namespace CurlUnity.Sse
         }
 
         /// <summary>复制为新的 <see cref="HttpRequest"/>，缺省补 Accept 与（可选）Last-Event-ID，不改动调用方对象。</summary>
-        private static HttpRequest CloneForSse(IHttpRequest src, string lastEventId)
+        private static HttpRequest CloneForSse(HttpRequest src, string lastEventId)
         {
             return new HttpRequest
             {

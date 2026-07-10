@@ -17,15 +17,15 @@ namespace CurlUnity.Sse
         /// <para>
         /// 用本重载（不在参数里传回调）时，<b>请在方法返回后立即挂回调</b>（OnEvent/OnError/OnStateChanged）；
         /// 想彻底消除 construct-then-subscribe 竞态、保证不漏首个事件/状态，请改用带回调参数的重载
-        /// <see cref="OpenSse(IHttpClient, IHttpRequest, Action{SseEvent}, Action{Exception}, Action{SseConnectionState, SseConnectionState}, SseConnectionOptions, CancellationToken)"/>。
+        /// <see cref="OpenSse(IHttpClient, HttpRequest, Action{SseEvent}, Action{Exception}, Action{SseConnectionState, SseConnectionState}, SseConnectionOptions, CancellationToken)"/>。
         /// </para>
         /// 库内部每轮克隆 <paramref name="request"/> 并注入 Accept/Last-Event-ID，绝不改动该对象。
         /// </summary>
         /// <exception cref="InvalidOperationException">
-        /// <paramref name="request"/> 已设置 <see cref="IHttpRequest.OnDataReceived"/>
-        /// 或 <see cref="IHttpRequest.OnHeadersReceived"/>（SSE 需接管）。
+        /// <paramref name="request"/> 已设置 <see cref="HttpRequest.OnDataReceived"/>
+        /// 或 <see cref="HttpRequest.OnHeadersReceived"/>（SSE 需接管）。
         /// </exception>
-        public static ISseConnection OpenSse(this IHttpClient client, IHttpRequest request,
+        public static ISseConnection OpenSse(this IHttpClient client, HttpRequest request,
             SseConnectionOptions options = null, CancellationToken ct = default)
         {
             ValidateRequest(client, request);
@@ -40,10 +40,10 @@ namespace CurlUnity.Sse
         /// <param name="onError">连接错误触发（随后按策略自动重连）。可空。</param>
         /// <param name="onStateChanged">状态变化触发，参数为 (旧状态, 新状态)。可空。</param>
         /// <exception cref="InvalidOperationException">
-        /// <paramref name="request"/> 已设置 <see cref="IHttpRequest.OnDataReceived"/>
-        /// 或 <see cref="IHttpRequest.OnHeadersReceived"/>（SSE 需接管）。
+        /// <paramref name="request"/> 已设置 <see cref="HttpRequest.OnDataReceived"/>
+        /// 或 <see cref="HttpRequest.OnHeadersReceived"/>（SSE 需接管）。
         /// </exception>
-        public static ISseConnection OpenSse(this IHttpClient client, IHttpRequest request,
+        public static ISseConnection OpenSse(this IHttpClient client, HttpRequest request,
             Action<SseEvent> onEvent,
             Action<Exception> onError = null,
             Action<SseConnectionState, SseConnectionState> onStateChanged = null,
@@ -58,12 +58,12 @@ namespace CurlUnity.Sse
         /// <summary>
         /// 打开一个带自动重连的 SSE 连接，每轮(重)连前调用 <paramref name="requestFactory"/> 构造请求
         /// ——可在其中 <c>await</c> 刷新 token / 动态构造 URL、headers（async headers 外置，库不碰 token）。
-        /// 工厂返回的 request 不应设置 <see cref="IHttpRequest.OnDataReceived"/> 或
-        /// <see cref="IHttpRequest.OnHeadersReceived"/>（由 SSE 接管，已设会经 <see cref="ISseConnection.OnError"/>
-        /// 报错并重连）。其余同 <see cref="OpenSse(IHttpClient, IHttpRequest, SseConnectionOptions, CancellationToken)"/>。
+        /// 工厂返回的 request 不应设置 <see cref="HttpRequest.OnDataReceived"/> 或
+        /// <see cref="HttpRequest.OnHeadersReceived"/>（由 SSE 接管，已设会经 <see cref="ISseConnection.OnError"/>
+        /// 报错并重连）。其余同 <see cref="OpenSse(IHttpClient, HttpRequest, SseConnectionOptions, CancellationToken)"/>。
         /// </summary>
         public static ISseConnection OpenSse(this IHttpClient client,
-            Func<CancellationToken, Task<IHttpRequest>> requestFactory,
+            Func<CancellationToken, Task<HttpRequest>> requestFactory,
             SseConnectionOptions options = null, CancellationToken ct = default)
         {
             if (client == null) throw new ArgumentNullException(nameof(client));
@@ -72,11 +72,11 @@ namespace CurlUnity.Sse
         }
 
         /// <summary>
-        /// 同 <see cref="OpenSse(IHttpClient, Func{CancellationToken, Task{IHttpRequest}}, SseConnectionOptions, CancellationToken)"/>，
+        /// 同 <see cref="OpenSse(IHttpClient, Func{CancellationToken, Task{HttpRequest}}, SseConnectionOptions, CancellationToken)"/>，
         /// 但在后台循环启动前挂接回调（消除 construct-then-subscribe 竞态）。
         /// </summary>
         public static ISseConnection OpenSse(this IHttpClient client,
-            Func<CancellationToken, Task<IHttpRequest>> requestFactory,
+            Func<CancellationToken, Task<HttpRequest>> requestFactory,
             Action<SseEvent> onEvent,
             Action<Exception> onError = null,
             Action<SseConnectionState, SseConnectionState> onStateChanged = null,
@@ -89,7 +89,7 @@ namespace CurlUnity.Sse
                 onEvent, onError, onStateChanged);
         }
 
-        private static void ValidateRequest(IHttpClient client, IHttpRequest request)
+        private static void ValidateRequest(IHttpClient client, HttpRequest request)
         {
             if (client == null) throw new ArgumentNullException(nameof(client));
             if (request == null) throw new ArgumentNullException(nameof(request));

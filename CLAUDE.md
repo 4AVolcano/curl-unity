@@ -72,7 +72,7 @@ Packages/com.basecity.curl-unity/
 │   │   └── CurlLog.cs             #   内部日志 (Unity Debug / stderr 适配)
 │   ├── Http/                      # 对外 HTTP API
 │   │   ├── IHttpClient.cs / CurlHttpClient.cs
-│   │   ├── IHttpRequest.cs / HttpRequest.cs / HttpMethod.cs / HttpVersion.cs
+│   │   ├── HttpRequest.cs / HttpMethod.cs / HttpVersion.cs
 │   │   ├── IHttpResponse.cs / HttpResponse.cs
 │   │   └── HttpClientExtensions.cs
 │   ├── Diagnostics/               # 可选诊断 (构造时 enableDiagnostics=true 才启用)

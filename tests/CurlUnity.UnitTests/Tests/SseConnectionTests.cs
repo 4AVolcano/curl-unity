@@ -41,13 +41,13 @@ namespace CurlUnity.UnitTests.Tests
         {
             private readonly Func<int, Behavior> _plan;
             private int _calls;
-            public readonly List<IHttpRequest> Requests = new();
+            public readonly List<HttpRequest> Requests = new();
             public Task Gate = Task.CompletedTask; // 默认不拦；需要确定性的用例设为未完成的 TCS
             public int CallCount => Volatile.Read(ref _calls);
 
             public ControllableHttpClient(Func<int, Behavior> plan) => _plan = plan;
 
-            public async Task<IHttpResponse> SendAsync(IHttpRequest request, CancellationToken ct)
+            public async Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct)
             {
                 await Gate.ConfigureAwait(false); // 在测试挂好回调并 release 前不产数据
                 int idx = Interlocked.Increment(ref _calls) - 1;
@@ -102,8 +102,8 @@ namespace CurlUnity.UnitTests.Tests
             ReconnectDelayIncFn = _ => TimeSpan.Zero,
         };
 
-        private static Func<CancellationToken, Task<IHttpRequest>> Factory(string url = "http://x")
-            => _ => Task.FromResult<IHttpRequest>(new HttpRequest { Url = url });
+        private static Func<CancellationToken, Task<HttpRequest>> Factory(string url = "http://x")
+            => _ => Task.FromResult(new HttpRequest { Url = url });
 
         /// <summary>创建一个被 gate 拦住的 stub + release 委托（挂好回调后调 release 再产数据）。</summary>
         private static (ControllableHttpClient client, Action release) Gated(Func<int, Behavior> plan)
@@ -170,7 +170,7 @@ namespace CurlUnity.UnitTests.Tests
             using var conn = new SseConnection(client, Factory(), ZeroDelay(), CancellationToken.None);
 
             await WaitUntil(() => client.CallCount >= 2);
-            IHttpRequest second;
+            HttpRequest second;
             lock (client.Requests) second = client.Requests[1];
             Assert.Contains(second.Headers, kv => kv.Key == "Last-Event-ID" && kv.Value == "5");
         }
@@ -261,7 +261,7 @@ namespace CurlUnity.UnitTests.Tests
         public void OpenSse_NullRequest_Throws()
         {
             using var client = new ControllableHttpClient(_ => Behavior.Block());
-            Assert.Throws<ArgumentNullException>(() => client.OpenSse((IHttpRequest)null));
+            Assert.Throws<ArgumentNullException>(() => client.OpenSse((HttpRequest)null));
         }
 
         [Fact]
@@ -285,7 +285,7 @@ namespace CurlUnity.UnitTests.Tests
         {
             using var client = new ControllableHttpClient(_ => Behavior.Block());
             Assert.Throws<ArgumentNullException>(
-                () => client.OpenSse((Func<CancellationToken, Task<IHttpRequest>>)null));
+                () => client.OpenSse((Func<CancellationToken, Task<HttpRequest>>)null));
         }
 
         [Fact]

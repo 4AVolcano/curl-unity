@@ -174,7 +174,7 @@ namespace CurlUnity.IntegrationTests.Tests
                 _ =>
                 {
                     Interlocked.Increment(ref calls);
-                    return Task.FromResult<IHttpRequest>(
+                    return Task.FromResult(
                         new HttpRequest { Url = $"{_server.HttpUrl}/sse-503", TimeoutMs = 0 });
                 },
                 options);

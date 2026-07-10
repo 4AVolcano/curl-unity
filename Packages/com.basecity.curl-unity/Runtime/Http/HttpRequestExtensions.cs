@@ -6,13 +6,13 @@ using System.Text;
 namespace CurlUnity.Http
 {
     /// <summary>
-    /// <see cref="IHttpRequest"/> 的请求级便利扩展,当前主要是常见认证方式的 header
-    /// 辅助。链式返回 <see cref="IHttpRequest"/> 支持 fluent 写法。
+    /// <see cref="HttpRequest"/> 的请求级便利扩展,当前主要是常见认证方式的 header
+    /// 辅助。链式返回 <see cref="HttpRequest"/> 支持 fluent 写法。
     /// </summary>
     /// <remarks>
     /// 这些扩展只是拼接 <c>Authorization</c> header 的 shortcut,不走 libcurl 的
     /// <c>CURLOPT_USERPWD</c>/<c>CURLOPT_HTTPAUTH</c>,因此不支持 Digest/NTLM。
-    /// 如果调用方之前已经在 <see cref="IHttpRequest.Headers"/> 里设过
+    /// 如果调用方之前已经在 <see cref="HttpRequest.Headers"/> 里设过
     /// <c>Authorization</c>, 这里<b>追加</b>一条新 header 而不替换, 由调用方自行保证
     /// 不重复(HTTP 规范下 Authorization 出现多次行为未定义)。
     /// </remarks>
@@ -21,7 +21,7 @@ namespace CurlUnity.Http
         /// <summary>
         /// 添加 <c>Authorization: Bearer &lt;token&gt;</c> header。
         /// </summary>
-        public static IHttpRequest WithBearerToken(this IHttpRequest request, string token)
+        public static HttpRequest WithBearerToken(this HttpRequest request, string token)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
             if (string.IsNullOrEmpty(token)) throw new ArgumentException("token required", nameof(token));
@@ -32,7 +32,7 @@ namespace CurlUnity.Http
         /// 添加 <c>Authorization: Basic &lt;base64(user:password)&gt;</c> header。user/password
         /// 按 RFC 7617 以 UTF-8 编码后 base64。
         /// </summary>
-        public static IHttpRequest WithBasicAuth(this IHttpRequest request, string user, string password)
+        public static HttpRequest WithBasicAuth(this HttpRequest request, string user, string password)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
             if (user == null) throw new ArgumentNullException(nameof(user));
@@ -43,7 +43,7 @@ namespace CurlUnity.Http
             return AddAuthHeader(request, "Basic " + encoded);
         }
 
-        private static IHttpRequest AddAuthHeader(IHttpRequest request, string value)
+        private static HttpRequest AddAuthHeader(HttpRequest request, string value)
         {
             // Headers 是 IEnumerable<KV>, 可能是 null / array / List; 物化成 List 再 append
             var list = request.Headers as List<KeyValuePair<string, string>>
