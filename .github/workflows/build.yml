@@ -22,8 +22,9 @@ jobs:
   # macOS (ARM64 + x86_64)
   # ============================================================
   build-macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: arm64
@@ -40,7 +41,14 @@ jobs:
         run: |
           deps_hash=$(git submodule status | shasum -a 256 | cut -d' ' -f1)
           script_hash=$(shasum -a 256 scripts/build.sh | cut -d' ' -f1)
-          echo "hash=${deps_hash}-${script_hash}" >> $GITHUB_OUTPUT
+          toolchain_hash=$(
+            {
+              xcodebuild -version
+              xcrun --sdk macosx clang --version
+              xcrun --sdk macosx --show-sdk-version
+            } | shasum -a 256 | cut -d' ' -f1
+          )
+          echo "hash=${deps_hash}-${script_hash}-${toolchain_hash}" >> "$GITHUB_OUTPUT"
 
       - name: Cache dependencies
         uses: actions/cache@v4
@@ -80,7 +88,7 @@ jobs:
   # iOS ARM64
   # ============================================================
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,7 +99,14 @@ jobs:
         run: |
           deps_hash=$(git submodule status | shasum -a 256 | cut -d' ' -f1)
           script_hash=$(shasum -a 256 scripts/build.sh | cut -d' ' -f1)
-          echo "hash=${deps_hash}-${script_hash}" >> $GITHUB_OUTPUT
+          toolchain_hash=$(
+            {
+              xcodebuild -version
+              xcrun --sdk iphoneos clang --version
+              xcrun --sdk iphoneos --show-sdk-version
+            } | shasum -a 256 | cut -d' ' -f1
+          )
+          echo "hash=${deps_hash}-${script_hash}-${toolchain_hash}" >> "$GITHUB_OUTPUT"
 
       - name: Cache dependencies
         uses: actions/cache@v4
