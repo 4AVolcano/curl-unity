@@ -65,7 +65,14 @@ namespace CurlUnity.Http
         /// <summary>构造参数 <c>maxHostConnections</c> 的默认值。</summary>
         public const int DefaultMaxHostConnections = CurlMulti.DefaultMaxHostConnections;
 
+        /// <summary>使用默认连接数上限创建 client。</summary>
         /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
+        public CurlHttpClient(bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics,
+                DefaultMaxTotalConnections, DefaultMaxHostConnections)
+        {
+        }
+
         /// <param name="maxTotalConnections">本 client 同时保持的连接总数上限
         /// （<c>CURLMOPT_MAX_TOTAL_CONNECTIONS</c>）。超出的传输由 libcurl 内部排队等
         /// 空闲连接，不会失败。0 = 不限（libcurl 默认，不推荐——并发请求一多就会无上限
@@ -73,9 +80,10 @@ namespace CurlUnity.Http
         /// <param name="maxHostConnections">对单个 host 的连接数上限
         /// （<c>CURLMOPT_MAX_HOST_CONNECTIONS</c>）。0 = 不限。
         /// 默认 <see cref="DefaultMaxHostConnections"/>。</param>
-        public CurlHttpClient(bool enableDiagnostics = false,
-            int maxTotalConnections = DefaultMaxTotalConnections,
-            int maxHostConnections = DefaultMaxHostConnections)
+        /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
+        public CurlHttpClient(int maxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            bool enableDiagnostics = false)
             : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections, maxHostConnections)
         {
         }
