@@ -12,7 +12,7 @@ namespace CurlUnity.Sse
     /// 注入、<c>retry:</c> 响应、空闲/心跳超时、状态机。构造即开始连接（循环在后台线程运行）。
     /// </summary>
     /// <remarks>
-    /// 终止可观测性：循环结束（取消/Dispose/204/放弃/回调异常/未预期异常）总会完成 <see cref="Completion"/>，
+    /// 终止可观测性：循环结束（取消/Dispose/204/配置错误/放弃/回调异常/未预期异常）总会完成 <see cref="Completion"/>，
     /// 详见其文档。所有用户回调经 <see cref="RaiseEvent"/>/<see cref="RaiseError"/>/<see cref="SetState"/>
     /// 守护调用——回调抛出会被捕获、记录为终止原因并请求停止，绝不静默丢弃，也不会让后台 Task 变成未观测异常。
     /// </remarks>
@@ -108,6 +108,7 @@ namespace CurlUnity.Sse
         private async Task RunLoopAsync()
         {
             Exception lastError = null; // 最近一次失败原因（干净 EOF 为 null），用于 ShouldReconnect / 放弃异常
+            Exception terminalError = null; // 工厂返回非法 SSE 请求：确定性配置错误，不重连
             int attempts = 0;           // 当前失败连续计数（建立成功后清零）
             bool exhausted = false;     // 达到次数/时长上限而放弃
             try
@@ -127,7 +128,25 @@ namespace CurlUnity.Sse
                     {
                         _parser.Reset(); // 清上一连接半行/半事件/BOM（保留 LastEventId/Retry）
 
-                        var request = await _requestFactory(_linkedCt.Token).ConfigureAwait(false);
+                        var requestTask = _requestFactory(_linkedCt.Token);
+                        if (_linkedCt.IsCancellationRequested) break;
+                        if (requestTask == null)
+                        {
+                            terminalError = new InvalidOperationException(
+                                "SSE requestFactory 不能返回 null Task。");
+                            RaiseError(terminalError);
+                            break;
+                        }
+
+                        var request = await requestTask.ConfigureAwait(false);
+                        if (_linkedCt.IsCancellationRequested) break;
+                        var configurationError = SseCoreExtensions.GetRequestConfigurationError(request);
+                        if (configurationError != null)
+                        {
+                            terminalError = configurationError;
+                            RaiseError(configurationError);
+                            break;
+                        }
 
                         var sendTok = _linkedCt.Token;
                         var idle = _options.IdleTimeout ?? TimeSpan.Zero;
@@ -248,6 +267,7 @@ namespace CurlUnity.Sse
                 }
                 var cb = Volatile.Read(ref _callbackFault);
                 if (cb != null) _completion.TrySetException(cb);
+                else if (terminalError != null) _completion.TrySetException(terminalError);
                 else if (exhausted) _completion.TrySetException(new SseReconnectExhaustedException(attempts, lastError));
                 else _completion.TrySetResult(true);
             }

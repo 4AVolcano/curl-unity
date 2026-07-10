@@ -76,7 +76,7 @@ namespace CurlUnity.Sse
         /// 非 2xx <see cref="SseHttpStatusException"/>、空闲超时 <see cref="System.TimeoutException"/>，
         /// 或干净 2xx EOF（<c>null</c>）。返回 <c>false</c> 即停止重连并让 <see cref="ISseConnection.Completion"/>
         /// 优雅完成。<c>null</c>（默认）= 始终重连。
-        /// <para><b>204 No Content 恒为终止，不经过本回调。</b></para>
+        /// <para><b>204 No Content，以及 requestFactory 返回非法 SSE 请求，恒为终止，不经过本回调。</b></para>
         /// </summary>
         public Func<Exception, bool> ShouldReconnect { get; set; }
 

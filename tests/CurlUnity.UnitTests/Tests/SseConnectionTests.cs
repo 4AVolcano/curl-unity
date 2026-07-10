@@ -289,6 +289,193 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task RequestFactory_WithOnDataReceived_FaultsWithoutReconnect()
+        {
+            int factoryCalls = 0;
+            int shouldReconnectCalls = 0;
+            var errors = new List<Exception>();
+            var states = new List<SseConnectionState>();
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+            var options = ZeroDelay();
+            options.MaxReconnectAttempts = 2; // 旧行为兜底：避免配置错误无限重试拖挂测试
+            options.ShouldReconnect = _ =>
+            {
+                Interlocked.Increment(ref shouldReconnectCalls);
+                return true;
+            };
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return Task.FromResult(new HttpRequest
+                {
+                    Url = "http://x",
+                    OnDataReceived = (_, _, _) => { },
+                });
+            }
+
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); },
+                onStateChanged: (_, next) => { lock (states) states.Add(next); });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => conn.Completion);
+
+            Assert.Contains("OnDataReceived", ex.Message);
+            Assert.Equal(1, Volatile.Read(ref factoryCalls));
+            Assert.Equal(0, Volatile.Read(ref shouldReconnectCalls));
+            Assert.Equal(0, client.CallCount);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+            lock (errors) Assert.Same(ex, Assert.Single(errors));
+            lock (states) Assert.Equal(new[] { SseConnectionState.Closed }, states);
+        }
+
+        [Fact]
+        public async Task RequestFactory_WithOnHeadersReceived_FaultsWithoutReconnect()
+        {
+            int factoryCalls = 0;
+            var errors = new List<Exception>();
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+            var options = ZeroDelay();
+            options.MaxReconnectAttempts = 2;
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return Task.FromResult(new HttpRequest
+                {
+                    Url = "http://x",
+                    OnHeadersReceived = _ => { },
+                });
+            }
+
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => conn.Completion);
+
+            Assert.Contains("OnHeadersReceived", ex.Message);
+            Assert.Equal(1, Volatile.Read(ref factoryCalls));
+            Assert.Equal(0, client.CallCount);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+            lock (errors) Assert.Same(ex, Assert.Single(errors));
+        }
+
+        [Fact]
+        public async Task RequestFactory_ReturnsNull_FaultsWithoutReconnect()
+        {
+            int factoryCalls = 0;
+            var errors = new List<Exception>();
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+            var options = ZeroDelay();
+            options.MaxReconnectAttempts = 2;
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return Task.FromResult<HttpRequest>(null);
+            }
+
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => conn.Completion);
+
+            Assert.Contains("null", ex.Message);
+            Assert.Equal(1, Volatile.Read(ref factoryCalls));
+            Assert.Equal(0, client.CallCount);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+            lock (errors) Assert.Same(ex, Assert.Single(errors));
+        }
+
+        [Fact]
+        public async Task RequestFactory_ReturnsNullTask_FaultsWithoutReconnect()
+        {
+            int factoryCalls = 0;
+            var errors = new List<Exception>();
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+            var options = ZeroDelay();
+            options.MaxReconnectAttempts = 2;
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return null;
+            }
+
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => conn.Completion);
+
+            Assert.Contains("Task", ex.Message);
+            Assert.Equal(1, Volatile.Read(ref factoryCalls));
+            Assert.Equal(0, client.CallCount);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+            lock (errors) Assert.Same(ex, Assert.Single(errors));
+        }
+
+        [Fact]
+        public async Task RequestFactory_ThrowsInvalidOperationException_StillReconnects()
+        {
+            int factoryCalls = 0;
+            var errors = new List<Exception>();
+            var boom = new InvalidOperationException("temporary factory failure");
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                if (Interlocked.Increment(ref factoryCalls) == 1)
+                    return Task.FromException<HttpRequest>(boom);
+                return Task.FromResult(new HttpRequest { Url = "http://x" });
+            }
+
+            var conn = new SseConnection(client, CreateRequest, ZeroDelay(), CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            await WaitUntil(() => client.CallCount >= 1);
+
+            Assert.Equal(2, Volatile.Read(ref factoryCalls));
+            lock (errors) Assert.Same(boom, Assert.Single(errors));
+
+            conn.Dispose();
+            await conn.Completion;
+        }
+
+        [Fact]
+        public async Task Dispose_WhileRequestFactoryIsRunning_TakesPrecedenceOverConfigurationError()
+        {
+            int factoryCalls = 0;
+            var errors = new List<Exception>();
+            var factoryResult = new TaskCompletionSource<HttpRequest>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return factoryResult.Task; // 模拟忽略取消、稍后才返回的异步工厂
+            }
+
+            var conn = new SseConnection(client, CreateRequest, ZeroDelay(), CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+            await WaitUntil(() => Volatile.Read(ref factoryCalls) == 1);
+
+            conn.Dispose();
+            factoryResult.SetResult(new HttpRequest
+            {
+                Url = "http://x",
+                OnDataReceived = (_, _, _) => { },
+            });
+
+            await conn.Completion;
+
+            Assert.True(conn.Completion.IsCompletedSuccessfully);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+            Assert.Equal(0, client.CallCount);
+            lock (errors) Assert.Empty(errors);
+        }
+
+        [Fact]
         public async Task OpenSse_StaticRequest_Connects()
         {
             var client = new ControllableHttpClient(_ => Behavior.Block());
