@@ -37,17 +37,51 @@ namespace CurlUnity.Core
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
 
+        // 连接数上限默认值。libcurl 默认两者都是 0（不限），并发 SendAsync 一多就会
+        // 无上限开 socket——移动端抢占蜂窝无线电、耗尽 fd、也容易压垮服务端。默认给
+        // 保守上限，超出的传输由 libcurl 内部排队等空闲连接，不会失败。
+        internal const int DefaultMaxTotalConnections = 16;
+        internal const int DefaultMaxHostConnections = 6;
+
         public CurlMulti()
             : this(CurlNativeApi.Instance)
         {
         }
 
-        internal CurlMulti(ICurlApi api)
+        /// <param name="maxTotalConnections">CURLMOPT_MAX_TOTAL_CONNECTIONS；0 = 不限。</param>
+        /// <param name="maxHostConnections">CURLMOPT_MAX_HOST_CONNECTIONS；0 = 不限。</param>
+        internal CurlMulti(ICurlApi api,
+            int maxTotalConnections = DefaultMaxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            if (maxTotalConnections < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
+            if (maxHostConnections < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxHostConnections), "必须 >= 0（0 = 不限）");
+
             _multi = _api.MultiInit();
             if (_multi == IntPtr.Zero)
                 throw new InvalidOperationException("curl_multi_init returned null");
+
+            // setopt 失败不 fatal（这两个选项 libcurl 7.30+ 恒支持，防御性处理）：
+            // 没有上限只是回到 libcurl 默认行为，不值得让整个 client 构造失败。
+            if (maxTotalConnections > 0)
+            {
+                var rc = _api.MultiSetOptLong(_multi,
+                    CurlNative.CURLMOPT_MAX_TOTAL_CONNECTIONS, maxTotalConnections);
+                if (rc != CurlNative.CURLE_OK)
+                    CurlLog.Warn(
+                        $"CURLMOPT_MAX_TOTAL_CONNECTIONS returned {rc} ({_api.GetMultiErrorString(rc)}); connection count is unbounded.");
+            }
+            if (maxHostConnections > 0)
+            {
+                var rc = _api.MultiSetOptLong(_multi,
+                    CurlNative.CURLMOPT_MAX_HOST_CONNECTIONS, maxHostConnections);
+                if (rc != CurlNative.CURLE_OK)
+                    CurlLog.Warn(
+                        $"CURLMOPT_MAX_HOST_CONNECTIONS returned {rc} ({_api.GetMultiErrorString(rc)}); per-host connection count is unbounded.");
+            }
         }
 
         /// <summary>
@@ -526,13 +560,23 @@ namespace CurlUnity.Core
 #endif
         private static UIntPtr OnHeaderData(IntPtr ptr, UIntPtr size, UIntPtr nmemb, IntPtr userdata)
         {
+            // Header capture 是 best-effort：本回调里的任何失败都只导致 response.Headers
+            // 空缺，Body/StatusCode 不受影响。因此所有失败路径都返回 length（告诉 curl
+            // "已消费"，传输继续），而不是返回 0 触发 CURLE_WRITE_ERROR 把整个请求
+            // 打断成一个语义含糊的错误。与 OnWriteData（body 完整性 fatal，必须中止）
+            // 刻意不同。
             var length = size.ToUInt64() * nmemb.ToUInt64();
-            if (length == 0) return UIntPtr.Zero;
-            if (length > int.MaxValue) return UIntPtr.Zero;
+            if (length == 0) return UIntPtr.Zero; // 消费 0 字节 == length，语义一致
+            if (length > int.MaxValue)
+            {
+                // libcurl 单行 header 上限约 100KB，走到这里属于异常输入。此值在 32 位
+                // 平台上无法用 UIntPtr 表达为"已消费"，只能中止（实际不可达）。
+                CurlLog.Error($"OnHeaderData: header block of {length} bytes exceeds int.MaxValue; aborting transfer.");
+                return UIntPtr.Zero;
+            }
             var totalBytes = (int)length;
+            var lengthResult = (UIntPtr)totalBytes; // 所有 best-effort 失败路径都返回"已消费"
 
-            // GCHandle resolve 失败 log 但不影响主流程: header capture 是 best-effort,
-            // 失败时 response.Headers 会空缺,Body/StatusCode 仍正常。
             CurlRequest request;
             try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
             catch (Exception resolveEx)
@@ -540,9 +584,14 @@ namespace CurlUnity.Core
                 CurlLog.Error(
                     $"OnHeaderData: failed to resolve CurlRequest from userdata " +
                     $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
-                return UIntPtr.Zero;
+                return lengthResult;
             }
-            if (request == null) return UIntPtr.Zero;
+            if (request == null)
+            {
+                CurlLog.Error(
+                    $"OnHeaderData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                return lengthResult;
+            }
 
             try
             {
@@ -571,12 +620,19 @@ namespace CurlUnity.Core
                     request.HeaderBuffer.Write(buffer, 0, totalBytes);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                return UIntPtr.Zero;
+                // 捕获中途失败 → 已积累的 headers 是残缺的，比"缺失"更危险（调用方
+                // 无从分辨截断）。丢弃 buffer 让 response.Headers 干净地空缺，并 log
+                // 根因；传输本身继续。
+                CurlLog.Warn(
+                    $"OnHeaderData: header capture failed and was disabled for this request " +
+                    $"(response.Headers will be null): {ex.GetType().Name}: {ex.Message}");
+                try { request.HeaderBuffer?.Dispose(); } catch { /* best-effort */ }
+                request.HeaderBuffer = null;
             }
 
-            return (UIntPtr)totalBytes;
+            return lengthResult;
         }
 
         private static bool IsHttpStatusLine(byte[] buffer, int length)

@@ -36,6 +36,14 @@ namespace CurlUnity.Sse
         /// SSE 长连接建议在 request 上设
         /// <see cref="IHttpRequest.TimeoutMs"/>=0；本方法内部已为该连接开启 TCP keep-alive。
         /// </para>
+        /// <para>
+        /// 内部解析器启用默认防护上限（单行 <see cref="SseEventParser.DefaultMaxLineBytes"/>、
+        /// 单事件 <see cref="SseEventParser.DefaultMaxEventDataChars"/>），超限以
+        /// <see cref="System.IO.InvalidDataException"/> 结束本次读取；需要调整上限请改用
+        /// <see cref="SseConnectionExtensions.OpenSse(IHttpClient, IHttpRequest, SseConnectionOptions, System.Threading.CancellationToken)"/>
+        /// 并配置 <see cref="SseConnectionOptions.MaxLineBytes"/> / <see cref="SseConnectionOptions.MaxEventDataChars"/>，
+        /// 或自行组合 <see cref="SseEventParser"/>。
+        /// </para>
         /// </remarks>
         /// <exception cref="InvalidOperationException">
         /// <paramref name="request"/> 已设置 <see cref="IHttpRequest.OnDataReceived"/>

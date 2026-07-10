@@ -259,6 +259,109 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         // ================================================================
+        // OnHeaderData header callback — best-effort 契约
+        // ================================================================
+
+        [Fact]
+        public void OnHeaderData_HappyPath_AppendsToHeaderBufferAndConsumes()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            using var req = new CurlRequest(api) { CaptureHeaders = true, OnComplete = _ => { } };
+            multi.Send(req);
+
+            var line = System.Text.Encoding.ASCII.GetBytes("X-Test: 1\r\n");
+            var returned = api.InvokeHeaderCallback(req.Handle, line);
+
+            Assert.Equal((UIntPtr)line.Length, returned);
+            Assert.Equal(line, req.HeaderBuffer.ToArray());
+        }
+
+        [Fact]
+        public void OnHeaderData_WhenGCHandleTargetIsWrongType_ConsumesInsteadOfAbortingTransfer()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            using var req = new CurlRequest(api) { CaptureHeaders = true, OnComplete = _ => { } };
+            multi.Send(req);
+
+            // header capture 是 best-effort: resolve 失败只该丢 header, 不该返回 0
+            // 让 curl 以 CURLE_WRITE_ERROR 把整个传输打断(与 OnWriteData 刻意不同)。
+            var strayHandle = GCHandle.Alloc("not-a-request");
+            try
+            {
+                var payload = new byte[] { 1, 2, 3 };
+                var returned = api.InvokeHeaderCallbackWithUserdata(
+                    req.Handle, payload, GCHandle.ToIntPtr(strayHandle));
+
+                Assert.Equal((UIntPtr)payload.Length, returned);
+            }
+            finally
+            {
+                strayHandle.Free();
+            }
+        }
+
+        [Fact]
+        public void OnHeaderData_WhenBufferWriteFails_DisablesCaptureAndContinuesTransfer()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            using var req = new CurlRequest(api) { CaptureHeaders = true, OnComplete = _ => { } };
+            multi.Send(req);
+
+            // 模拟 HeaderBuffer 写入失败(ObjectDisposedException): 传输必须继续,
+            // 且残缺的 buffer 被整体丢弃(截断的 headers 比缺失更危险)。
+            req.HeaderBuffer.Dispose();
+
+            var line = System.Text.Encoding.ASCII.GetBytes("X-Test: 1\r\n");
+            var returned = api.InvokeHeaderCallback(req.Handle, line);
+
+            Assert.Equal((UIntPtr)line.Length, returned);
+            Assert.Null(req.HeaderBuffer);  // capture 已禁用 → response.Headers 将为 null
+
+            // 后续 header 块同样只消费不中断
+            var next = api.InvokeHeaderCallback(req.Handle, line);
+            Assert.Equal((UIntPtr)line.Length, next);
+        }
+
+        // ================================================================
+        // 连接数上限 (CURLMOPT_MAX_TOTAL_CONNECTIONS / MAX_HOST_CONNECTIONS)
+        // ================================================================
+
+        [Fact]
+        public void Constructor_AppliesDefaultConnectionLimits()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+
+            var state = api.GetMultiHandleState(api.LastMultiHandle);
+            Assert.Equal(CurlMulti.DefaultMaxTotalConnections,
+                state.LongOptions[CurlNative.CURLMOPT_MAX_TOTAL_CONNECTIONS]);
+            Assert.Equal(CurlMulti.DefaultMaxHostConnections,
+                state.LongOptions[CurlNative.CURLMOPT_MAX_HOST_CONNECTIONS]);
+        }
+
+        [Fact]
+        public void Constructor_ZeroConnectionLimits_SkipsSetopt()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api, maxTotalConnections: 0, maxHostConnections: 0);
+
+            var state = api.GetMultiHandleState(api.LastMultiHandle);
+            Assert.False(state.LongOptions.ContainsKey(CurlNative.CURLMOPT_MAX_TOTAL_CONNECTIONS));
+            Assert.False(state.LongOptions.ContainsKey(CurlNative.CURLMOPT_MAX_HOST_CONNECTIONS));
+        }
+
+        [Fact]
+        public void Constructor_NegativeConnectionLimits_Throws()
+        {
+            var api = new FakeCurlApi();
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CurlMulti(api, maxTotalConnections: -1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CurlMulti(api, maxHostConnections: -1));
+        }
+
+        // ================================================================
         // Helpers
         // ================================================================
 

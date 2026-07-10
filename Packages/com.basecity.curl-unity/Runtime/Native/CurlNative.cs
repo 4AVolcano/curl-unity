@@ -14,7 +14,12 @@ namespace CurlUnity.Native
     {
 #if UNITY_IOS && !UNITY_EDITOR
         private const string LIB = "__Internal";
-#elif UNITY_STANDALONE_WIN
+#elif UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        // Windows 上 DLL 文件名是 libcurl_unity.dll，且 Windows loader 不会自动补
+        // "lib" 前缀（macOS/Linux 的 Mono 会），必须写全名。
+        // UNITY_EDITOR_WIN 必须单独判断：Editor 中平台宏跟随激活的 build target，
+        // Windows 编辑器切到 Android/iOS target 时 UNITY_STANDALONE_WIN 不成立，
+        // 只按它判断会让 Play Mode 直接 DllNotFoundException。
         private const string LIB = "libcurl_unity";
 #else
         private const string LIB = "curl_unity";

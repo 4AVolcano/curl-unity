@@ -209,10 +209,14 @@ namespace CurlUnity.UnitTests.TestSupport
             return CurlNative.CURLE_OK;
         }
 
+        /// <summary>最近一次 <see cref="MultiInit"/> 创建的 multi handle（测试断言用）。</summary>
+        public IntPtr LastMultiHandle { get; private set; }
+
         public IntPtr MultiInit()
         {
             var handle = new IntPtr(_nextMultiHandle++);
             _multiHandles[handle] = new FakeMultiHandleState();
+            LastMultiHandle = handle;
             return handle;
         }
 
@@ -227,6 +231,13 @@ namespace CurlUnity.UnitTests.TestSupport
             if (_multiHandles.TryGetValue(multi, out var state))
                 state.IsCleanedUp = true;
 
+            return CurlNative.CURLE_OK;
+        }
+
+        public int MultiSetOptLong(IntPtr multi, int option, long value)
+        {
+            if (_multiHandles.TryGetValue(multi, out var state))
+                state.LongOptions[option] = value;
             return CurlNative.CURLE_OK;
         }
 
@@ -351,6 +362,9 @@ namespace CurlUnity.UnitTests.TestSupport
         /// <summary>测试用: 查看 easy handle 的内部状态 (IsCleanedUp / 已注册 callback 等)。</summary>
         public FakeEasyHandleState GetEasyHandleState(IntPtr easyHandle) => _easyHandles[easyHandle];
 
+        /// <summary>测试用: 查看 multi handle 的内部状态 (已设置的 CURLMOPT 等)。</summary>
+        public FakeMultiHandleState GetMultiHandleState(IntPtr multi) => _multiHandles[multi];
+
         /// <summary>
         /// 模拟 libcurl 完成了一个 easy handle 的传输, 下一次 MultiInfoRead 会取出。
         /// 找到包含此 easy 的 multi 并入队。
@@ -451,6 +465,27 @@ namespace CurlUnity.UnitTests.TestSupport
             }
         }
 
+        /// <summary>
+        /// 直接调用 easy 的 header callback, 传一个任意 userdata (可以是无效值),
+        /// 返回 callback 的返回值。测试 OnHeaderData 对 GCHandle resolve 失败的处理。
+        /// </summary>
+        public UIntPtr InvokeHeaderCallbackWithUserdata(IntPtr easyHandle, byte[] payload, IntPtr userdata)
+        {
+            var state = _easyHandles[easyHandle];
+            if (state.HeaderCallback == null)
+                throw new InvalidOperationException("Header callback has not been registered.");
+
+            var pin = GCHandle.Alloc(payload, GCHandleType.Pinned);
+            try
+            {
+                return state.HeaderCallback(pin.AddrOfPinnedObject(), (UIntPtr)1, (UIntPtr)payload.Length, userdata);
+            }
+            finally
+            {
+                pin.Free();
+            }
+        }
+
         public sealed class FakeEasyHandleState
         {
             public readonly Dictionary<int, string> StringOptions = new();
@@ -475,6 +510,7 @@ namespace CurlUnity.UnitTests.TestSupport
         {
             public readonly HashSet<IntPtr> ActiveHandles = new();
             public readonly Queue<(IntPtr easyHandle, int result)> CompletedHandles = new();
+            public readonly Dictionary<int, long> LongOptions = new();
             public bool IsCleanedUp;
         }
 

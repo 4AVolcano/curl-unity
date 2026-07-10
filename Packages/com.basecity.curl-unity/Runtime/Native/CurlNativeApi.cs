@@ -76,6 +76,9 @@ namespace CurlUnity.Native
 
         public int MultiCleanup(IntPtr multi) => CurlNative.curl_multi_cleanup(multi);
 
+        public int MultiSetOptLong(IntPtr multi, int option, long value) =>
+            CurlNative.curl_unity_multi_setopt_long(multi, option, value);
+
         public int MultiAddHandle(IntPtr multi, IntPtr easy) => CurlNative.curl_multi_add_handle(multi, easy);
 
         public int MultiRemoveHandle(IntPtr multi, IntPtr easy) => CurlNative.curl_multi_remove_handle(multi, easy);

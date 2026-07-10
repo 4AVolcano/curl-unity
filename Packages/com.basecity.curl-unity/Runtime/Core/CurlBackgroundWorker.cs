@@ -53,9 +53,13 @@ namespace CurlUnity.Core
         {
         }
 
-        internal CurlBackgroundWorker(ICurlApi api)
+        /// <param name="maxTotalConnections">透传 <see cref="CurlMulti"/>；0 = 不限。</param>
+        /// <param name="maxHostConnections">透传 <see cref="CurlMulti"/>；0 = 不限。</param>
+        internal CurlBackgroundWorker(ICurlApi api,
+            int maxTotalConnections = CurlMulti.DefaultMaxTotalConnections,
+            int maxHostConnections = CurlMulti.DefaultMaxHostConnections)
         {
-            _multi = new CurlMulti(api);
+            _multi = new CurlMulti(api, maxTotalConnections, maxHostConnections);
         }
 
         public void Start()

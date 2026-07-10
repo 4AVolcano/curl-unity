@@ -93,6 +93,23 @@ namespace CurlUnity.Sse
         /// <summary>重连时是否自动注入 <c>Last-Event-ID</c>（取自解析器已确认的 id）。默认 <c>true</c>（SSE 规范行为）。</summary>
         public bool AutoInjectLastEventId { get; set; } = true;
 
+        // ——————————————————— 解析器防护上限（反 OOM）———————————————————
+
+        /// <summary>
+        /// 单行原始字节数上限，透传给内部 <see cref="SseEventParser.MaxLineBytes"/>。
+        /// 超限视为对端恶意/损坏，本轮连接以 <see cref="System.IO.InvalidDataException"/> 失败
+        /// （经 <see cref="ISseConnection.OnError"/> 报告，随后按策略重连）。
+        /// 默认 <see cref="SseEventParser.DefaultMaxLineBytes"/>（1 MiB）。必须为正。
+        /// </summary>
+        public int MaxLineBytes { get; set; } = SseEventParser.DefaultMaxLineBytes;
+
+        /// <summary>
+        /// 单个事件累积 <c>data</c> 的上限（UTF-16 char），透传给内部
+        /// <see cref="SseEventParser.MaxEventDataChars"/>。超限语义同 <see cref="MaxLineBytes"/>。
+        /// 默认 <see cref="SseEventParser.DefaultMaxEventDataChars"/>（4M chars）。必须为正。
+        /// </summary>
+        public int MaxEventDataChars { get; set; } = SseEventParser.DefaultMaxEventDataChars;
+
         // ————————————————— 测试注入点（internal，不属公开 API）—————————————————
 
         /// <summary>
