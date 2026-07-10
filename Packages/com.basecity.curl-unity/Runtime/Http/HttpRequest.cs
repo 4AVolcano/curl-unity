@@ -140,7 +140,13 @@ namespace CurlUnity.Http
         /// 在后台线程调用。参数: (buffer, offset, length)
         /// </summary>
         /// <remarks>
-        /// <b>契约：回调必须快速返回。</b> 该回调在 libcurl 的 write function
+        /// <para>
+        /// <b>契约：buffer 仅在本次回调执行期间有效。</b> buffer 来自共享池，回调返回后
+        /// 其内容可能立即被后续网络数据覆盖。同步写文件、同步计算 hash、同步解析均可直接使用；
+        /// 如需保存、排队或跨线程处理，必须在回调内复制有效的 <c>buffer</c> 区间。
+        /// </para>
+        /// <para>
+        /// <b>回调必须快速返回。</b> 该回调在 libcurl 的 write function
         /// 调用栈内执行，libcurl 不允许中断进行中的回调；在回调里阻塞会直接
         /// 占住 worker 线程：
         /// <list type="bullet">
@@ -151,6 +157,7 @@ namespace CurlUnity.Http
         /// </list>
         /// 需要长时间处理数据时，回调里把 buffer 拷走投递到别的线程即可，不要在
         /// 回调里同步等 I/O、锁或其它长耗时工作。
+        /// </para>
         /// </remarks>
         public Action<byte[], int, int> OnDataReceived { get; set; }
 

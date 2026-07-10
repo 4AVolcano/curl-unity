@@ -63,6 +63,9 @@ using var resp = await client.SendAsync(req);
 // 此时 resp.Body == null (流式下载不缓冲到内存)
 ```
 
+`buffer` 从共享池借用，**只在当次回调执行期间有效**。同步写文件、计算 hash 或解析可以
+直接使用；需要保存、排队或跨线程处理时，必须在回调返回前复制 `offset/length` 指定的区间。
+
 ## 响应头就绪回调（OnHeadersReceived）
 
 流式下载等场景下，如需在 body 到达前检查状态码：
@@ -221,5 +224,5 @@ var req = new HttpRequest
 
 - `SendAsync` 是真正异步,I/O 在专属 worker 线程驱动,不会卡 Unity 主线程
 - 完成后 Task 的 continuation 默认回原 SynchronizationContext(Unity 主线程)
-- `OnDataReceived` 回调在 **worker 线程** 执行,不要碰 Unity API
+- `OnDataReceived` 回调在 **worker 线程** 执行,不要碰 Unity API；buffer 只在回调期间有效
 - `CurlHttpClient` 实例长期持有,不要为每次请求重建

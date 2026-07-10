@@ -161,6 +161,34 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public void OnWriteData_StreamedChunks_DoNotAllocatePerChunkAfterPoolWarmup()
+        {
+            const int chunkSize = 16 * 1024;
+            const int iterations = 64;
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            int callbackCount = 0;
+            using var req = new CurlRequest(api)
+            {
+                DataCallback = (_, _, _) => callbackCount++,
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            var payload = new byte[chunkSize];
+            api.InvokeWriteCallback(req.Handle, payload); // 预热 JIT / ArrayPool bucket
+
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < iterations; i++)
+                api.InvokeWriteCallback(req.Handle, payload);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(iterations + 1, callbackCount);
+            Assert.True(allocated < chunkSize,
+                $"稳态流式回调不应按 chunk 分配；{iterations} 次共分配 {allocated} bytes");
+        }
+
+        [Fact]
         public void OnWriteData_WhenGCHandleTargetIsWrongType_ReturnsZeroWithoutCrashing()
         {
             var api = new FakeCurlApi();
