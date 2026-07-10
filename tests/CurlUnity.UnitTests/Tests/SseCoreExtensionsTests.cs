@@ -20,11 +20,11 @@ namespace CurlUnity.UnitTests.Tests
         /// <summary>捕获 SendAsync 收到的 request，可选地在发送时回灌数据。</summary>
         private sealed class CapturingHttpClient : IHttpClient
         {
-            public IHttpRequest Captured;
-            public Func<IHttpRequest, IHttpResponse> Responder;
-            public Action<IHttpRequest> OnSend;
+            public HttpRequest Captured;
+            public Func<HttpRequest, IHttpResponse> Responder;
+            public Action<HttpRequest> OnSend;
 
-            public Task<IHttpResponse> SendAsync(IHttpRequest request, CancellationToken ct = default)
+            public Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct = default)
             {
                 Captured = request;
                 var response = Responder?.Invoke(request) ?? new StubResponse(200);
@@ -53,7 +53,7 @@ namespace CurlUnity.UnitTests.Tests
             public void Dispose() => IsDisposed = true;
         }
 
-        private static void Feed(IHttpRequest r, string s)
+        private static void Feed(HttpRequest r, string s)
         {
             var b = Encoding.UTF8.GetBytes(s);
             r.OnDataReceived(b, 0, b.Length);

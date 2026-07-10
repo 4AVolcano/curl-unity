@@ -34,8 +34,8 @@ namespace CurlUnity.Http
         HttpVersion Version { get; }
 
         /// <summary>
-        /// 响应体。流式模式(设置 <see cref="IHttpRequest.OnDataReceived"/>)下为 null,
-        /// 数据已通过回调逐块交付。若请求开启了 <see cref="IHttpRequest.AutoDecompressResponse"/>,
+        /// 响应体。流式模式(设置 <see cref="HttpRequest.OnDataReceived"/>)下为 null,
+        /// 数据已通过回调逐块交付。若请求开启了 <see cref="HttpRequest.AutoDecompressResponse"/>,
         /// 这里是解压后的明文。
         /// </summary>
         byte[] Body { get; }
@@ -58,7 +58,7 @@ namespace CurlUnity.Http
 
         /// <summary>
         /// 所有响应头。key 为小写 header name,value 为该 header 的所有值。
-        /// 仅在请求设置 <see cref="IHttpRequest.EnableResponseHeaders"/>=true 时可用,否则返回 null。
+        /// 仅在请求设置 <see cref="HttpRequest.EnableResponseHeaders"/>=true 时可用,否则返回 null。
         /// </summary>
         IReadOnlyDictionary<string, string[]> Headers { get; }
     }

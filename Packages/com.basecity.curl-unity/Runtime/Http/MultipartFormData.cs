@@ -22,7 +22,7 @@ namespace CurlUnity.Http
     /// 大文件场景用 <see cref="AddFile(string, string, System.IO.Stream, long, string)"/>
     /// 提交 <see cref="System.IO.Stream"/>,配合 <see cref="BuildStream"/> 和 <see cref="ContentLength"/>
     /// 走流式上传,避免全量读入内存。<see cref="HasStreamParts"/> 为 <c>true</c> 时
-    /// <see cref="HttpClientExtensions.PostMultipartAsync"/> 会自动路由到 <see cref="IHttpRequest.BodyStream"/> 通路。
+    /// <see cref="HttpClientExtensions.PostMultipartAsync"/> 会自动路由到 <see cref="HttpRequest.BodyStream"/> 通路。
     /// </para>
     /// <para>
     /// <see cref="ContentType"/> 在实例构造时即可读,包含随机生成的 boundary。
@@ -181,8 +181,8 @@ namespace CurlUnity.Http
 
         /// <summary>
         /// 返回按需产出 multipart body 的只读 Stream。Stream part 的数据按调用 <c>Read</c>
-        /// 时从源 Stream 拉取,整个 body 不会一次性进内存。配合 <see cref="IHttpRequest.BodyStream"/>
-        /// 使用,设 <see cref="IHttpRequest.BodyLength"/> = <see cref="ContentLength"/>。
+        /// 时从源 Stream 拉取,整个 body 不会一次性进内存。配合 <see cref="HttpRequest.BodyStream"/>
+        /// 使用,设 <see cref="HttpRequest.BodyLength"/> = <see cref="ContentLength"/>。
         /// </summary>
         /// <remarks>
         /// 调用后 form 进入 frozen 状态,后续 <c>AddText</c>/<c>AddFile</c> 抛

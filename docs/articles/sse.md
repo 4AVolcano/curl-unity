@@ -3,7 +3,7 @@
 SSE (`text/event-stream`) 在 `CurlUnity.Sse` 命名空间，按「协议核心 / 工程便利」分层：
 
 - **`SseEventParser`** — 纯协议解析器，喂字节出事件，零网络依赖，可独立复用（Layer 0）。
-- **`ReadServerSentEventsAsync`** — `IHttpClient` 扩展方法，在一个 `IHttpRequest` 上读**一段** SSE 连接（连接结束即返回，**不重连**），单连接原语（Layer 1）。
+- **`ReadServerSentEventsAsync`** — `IHttpClient` 扩展方法，在一个 `HttpRequest` 上读**一段** SSE 连接（连接结束即返回，**不重连**），单连接原语（Layer 1）。
 - **`OpenSse` / `ISseConnection`** — 带**自动重连 / 退避 / 心跳 / 状态机 / Last-Event-ID** 的便利层（Layer 2）。
 
 多数业务直接用 `OpenSse`（见下「自动重连」）即可开箱即用；只需「读一段就结束」时用 `ReadServerSentEventsAsync`；要完全自定义重连策略时用 `SseEventParser` + `SendAsync`。

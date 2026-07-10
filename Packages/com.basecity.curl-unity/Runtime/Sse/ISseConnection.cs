@@ -10,7 +10,7 @@ namespace CurlUnity.Sse
     /// <remarks>
     /// <para>
     /// <b>所有回调在后台线程触发（worker / 线程池），禁止阻塞</b>；需要碰 Unity API 时调用方自行 marshal
-    /// （与 <see cref="Http.IHttpRequest.OnDataReceived"/> 契约一致）。
+    /// （与 <see cref="Http.HttpRequest.OnDataReceived"/> 契约一致）。
     /// </para>
     /// <para>
     /// <b>回调（<see cref="OnEvent"/> / <see cref="OnError"/> / <see cref="OnStateChanged"/>）不应抛异常</b>：
@@ -19,7 +19,7 @@ namespace CurlUnity.Sse
     /// </para>
     /// <para>
     /// 想在构造阶段就消除 construct-then-subscribe 竞态、保证不漏掉首个事件/状态时，请用
-    /// <see cref="SseConnectionExtensions.OpenSse(Http.IHttpClient, Http.IHttpRequest, Action{SseEvent}, Action{Exception}, Action{SseConnectionState, SseConnectionState}, SseConnectionOptions, System.Threading.CancellationToken)"/>
+    /// <see cref="SseConnectionExtensions.OpenSse(Http.IHttpClient, Http.HttpRequest, Action{SseEvent}, Action{Exception}, Action{SseConnectionState, SseConnectionState}, SseConnectionOptions, System.Threading.CancellationToken)"/>
     /// 在打开时直接传入回调（回调在后台循环启动前完成挂接）。
     /// </para>
     /// </remarks>
