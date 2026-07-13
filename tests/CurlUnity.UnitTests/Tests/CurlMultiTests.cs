@@ -460,6 +460,31 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Equal(new long[] { 200 }, observedStatuses);
         }
 
+        [Theory]
+        [InlineData("Location:\r\n")]
+        [InlineData("Location: \t \r\n")]
+        public void OnHeaderData_Followed302WithEmptyLocation_FiresFinalResponseOnce(
+            string locationLine)
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var observedStatuses = new System.Collections.Generic.List<long>();
+            using var req = new CurlRequest(api)
+            {
+                CaptureHeaders = true,
+                HeadersReceivedCallback = (statusCode, _) => observedStatuses.Add(statusCode),
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 302 Found\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii(locationLine));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(new long[] { 302 }, observedStatuses);
+        }
+
         [Fact]
         public async Task OnHeaderData_RedirectFollowingDisabled_FiresCompleted302Block()
         {

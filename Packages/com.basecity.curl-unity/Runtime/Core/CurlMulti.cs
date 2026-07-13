@@ -745,7 +745,18 @@ namespace CurlUnity.Core
                     return false;
             }
 
-            return true;
+            // libcurl trims optional whitespace around Location and does not follow an empty
+            // value. Match that decision so an empty Location does not defer an otherwise-final
+            // 3xx response block.
+            for (var i = name.Length + 1; i < length; i++)
+            {
+                var value = buffer[i];
+                if (value == (byte)' ' || value == (byte)'\t')
+                    continue;
+                return value != (byte)'\r' && value != (byte)'\n';
+            }
+
+            return false;
         }
 
         private static bool IsHeaderBlockTerminator(byte[] buffer, int length)
