@@ -61,7 +61,8 @@ namespace CurlUnity.Sse
             if (onEvent == null) throw new ArgumentNullException(nameof(onEvent));
 
             var parser = new SseEventParser();
-            return RunOneConnectionAsync(client, request, parser, onEvent, onByteReceived: null, ct);
+            return RunOneConnectionAsync(client, request, parser, onEvent,
+                onByteReceived: null, onAcceptedHeaders: null, ct);
         }
 
         /// <summary>
@@ -73,10 +74,11 @@ namespace CurlUnity.Sse
         /// 公开入口 <see cref="ReadServerSentEventsAsync"/> 每次新建 parser，无此顾虑。
         /// </para>
         /// <paramref name="onByteReceived"/> 在每块字节到达时回调（上层做空闲/心跳计时，本层可传 null）。
+        /// <paramref name="onAcceptedHeaders"/> 在收到非 204 的 2xx 响应头时回调。
         /// </summary>
         internal static Task<IHttpResponse> RunOneConnectionAsync(
             IHttpClient client, HttpRequest request, SseEventParser parser,
-            Action<SseEvent> onEvent, Action onByteReceived, CancellationToken ct,
+            Action<SseEvent> onEvent, Action onByteReceived, Action onAcceptedHeaders, CancellationToken ct,
             string lastEventId = null)
         {
             var configurationError = GetRequestConfigurationError(request);
@@ -87,6 +89,8 @@ namespace CurlUnity.Sse
             {
                 if (resp.StatusCode < 200 || resp.StatusCode >= 300)
                     throw new SseHttpStatusException(resp.StatusCode);
+                if (resp.StatusCode != 204)
+                    onAcceptedHeaders?.Invoke();
             };
             sseRequest.OnDataReceived = (buf, offset, len) =>
             {

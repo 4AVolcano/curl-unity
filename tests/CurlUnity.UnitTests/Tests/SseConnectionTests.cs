@@ -41,21 +41,33 @@ namespace CurlUnity.UnitTests.Tests
         {
             private readonly Func<int, Behavior> _plan;
             private int _calls;
+            private int _headersReceived;
             public readonly List<HttpRequest> Requests = new();
-            public Task Gate = Task.CompletedTask; // 默认不拦；需要确定性的用例设为未完成的 TCS
+            public Task HeadersGate = Task.CompletedTask; // 默认不拦；需要确定性的用例设为未完成的 TCS
+            public Task BodyGate = Task.CompletedTask; // 可单独拦 body，验证仅收到 headers 时的状态
             public int CallCount => Volatile.Read(ref _calls);
+            public int HeadersReceivedCount => Volatile.Read(ref _headersReceived);
 
             public ControllableHttpClient(Func<int, Behavior> plan) => _plan = plan;
 
             public async Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct)
             {
-                await Gate.ConfigureAwait(false); // 在测试挂好回调并 release 前不产数据
+                await HeadersGate.WaitAsync(ct).ConfigureAwait(false);
                 int idx = Interlocked.Increment(ref _calls) - 1;
                 lock (Requests) Requests.Add(request);
                 var b = _plan(idx);
 
                 var response = new StubResponse(b.StatusCode);
-                request.OnHeadersReceived?.Invoke(response);
+                try
+                {
+                    request.OnHeadersReceived?.Invoke(response);
+                }
+                finally
+                {
+                    Interlocked.Increment(ref _headersReceived);
+                }
+
+                await BodyGate.WaitAsync(ct).ConfigureAwait(false);
 
                 if (b.Bytes != null && request.OnDataReceived != null)
                 {
@@ -105,11 +117,11 @@ namespace CurlUnity.UnitTests.Tests
         private static Func<CancellationToken, Task<HttpRequest>> Factory(string url = "http://x")
             => _ => Task.FromResult(new HttpRequest { Url = url });
 
-        /// <summary>创建一个被 gate 拦住的 stub + release 委托（挂好回调后调 release 再产数据）。</summary>
+        /// <summary>创建一个被 headers gate 拦住的 stub + release 委托（挂好回调后调 release 再响应）。</summary>
         private static (ControllableHttpClient client, Action release) Gated(Func<int, Behavior> plan)
         {
             var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var client = new ControllableHttpClient(plan) { Gate = gate.Task };
+            var client = new ControllableHttpClient(plan) { HeadersGate = gate.Task };
             return (client, () => gate.TrySetResult(true));
         }
 
@@ -163,6 +175,22 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task State_OpenAfterAcceptedHeaders_BeforeBody()
+        {
+            var bodyGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var client = new ControllableHttpClient(_ => Behavior.Block(bytes: "data: later\n\n"))
+            {
+                BodyGate = bodyGate.Task,
+            };
+            using var conn = new SseConnection(client, Factory(), ZeroDelay(), CancellationToken.None);
+
+            await WaitUntil(() => client.HeadersReceivedCount == 1);
+
+            Assert.False(bodyGate.Task.IsCompleted);
+            Assert.Equal(SseConnectionState.Open, conn.State);
+        }
+
+        [Fact]
         public async Task InjectsLastEventId_OnReconnect()
         {
             var client = new ControllableHttpClient(idx =>
@@ -192,6 +220,22 @@ namespace CurlUnity.UnitTests.Tests
             lock (errors) first = errors[0];
             var status = Assert.IsType<SseHttpStatusException>(first);
             Assert.Equal(503, status.StatusCode);
+        }
+
+        [Fact]
+        public async Task NonSuccessStatus_NeverOpens()
+        {
+            var states = new List<SseConnectionState>();
+            var options = ZeroDelay();
+            options.ShouldReconnect = _ => false;
+            using var conn = new SseConnection(
+                new ControllableHttpClient(_ => Behavior.Eof(503)),
+                Factory(), options, CancellationToken.None,
+                onStateChanged: (_, next) => { lock (states) states.Add(next); });
+
+            await conn.Completion;
+
+            lock (states) Assert.DoesNotContain(SseConnectionState.Open, states);
         }
 
         [Fact]
@@ -480,8 +524,8 @@ namespace CurlUnity.UnitTests.Tests
         {
             var client = new ControllableHttpClient(_ => Behavior.Block());
             using var conn = client.OpenSse(new HttpRequest { Url = "http://x" }, ZeroDelay());
-            await WaitUntil(() => client.CallCount >= 1);
-            Assert.Equal(SseConnectionState.Connecting, conn.State); // 阻塞中、未收到字节 → 仍 Connecting
+            await WaitUntil(() => client.HeadersReceivedCount >= 1);
+            Assert.Equal(SseConnectionState.Open, conn.State); // 已接受 200 响应头，即使 body 仍阻塞也进入 Open
         }
 
         // ---- Codex Layer 2 评审修复 ----
@@ -490,15 +534,17 @@ namespace CurlUnity.UnitTests.Tests
         public async Task Status204_StopsReconnecting()
         {
             var errors = new List<Exception>();
-            var (client, release) = Gated(_ => Behavior.Eof(204)); // 始终 204
-            using var conn = new SseConnection(client, Factory(), ZeroDelay(), CancellationToken.None);
-            conn.OnError += e => { lock (errors) errors.Add(e); };
-            release();
+            var states = new List<SseConnectionState>();
+            var client = new ControllableHttpClient(_ => Behavior.Eof(204)); // 始终 204
+            using var conn = new SseConnection(client, Factory(), ZeroDelay(), CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); },
+                onStateChanged: (_, next) => { lock (states) states.Add(next); });
 
-            await WaitUntil(() => conn.State == SseConnectionState.Closed);
+            await conn.Completion;
             await Task.Delay(50);
             Assert.Equal(1, client.CallCount);  // 204 = 服务端要求停止 → 不重连
             lock (errors) Assert.Empty(errors); // 204 不报错
+            lock (states) Assert.DoesNotContain(SseConnectionState.Open, states);
         }
 
         [Fact]
@@ -551,20 +597,27 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
-        public async Task Backoff_NotReset_OnRepeatedEmptyEof()
+        public async Task Backoff_NotReset_WhenOnlyAcceptedHeadersAreReceived()
         {
-            // 连续空 2xx EOF（无字节）不应被视为"连接成功"：退避必须持续递增，
+            // 连续收到 2xx headers 后空 EOF（无 body 字节）会进入 Open，但不应被视为退避意义上的
+            // "连接成功"：退避必须持续递增，
             // 否则会以 init 间隔无限热循环猛打服务端（旧实现在每个 2xx EOF 后无条件重置退避）。
             var seen = new List<TimeSpan>();
+            int opens = 0;
             var options = new SseConnectionOptions
             {
                 ReconnectDelayInit = TimeSpan.Zero,
                 ReconnectDelayIncFn = d => { lock (seen) seen.Add(d); return d + TimeSpan.FromMilliseconds(1); },
             };
             var client = new ControllableHttpClient(idx => idx < 4 ? Behavior.Eof() : Behavior.Block());
-            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None);
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
+                onStateChanged: (_, next) =>
+                {
+                    if (next == SseConnectionState.Open) Interlocked.Increment(ref opens);
+                });
 
-            await WaitUntil(() => client.CallCount >= 5);
+            await WaitUntil(() => client.HeadersReceivedCount >= 5);
+            Assert.True(Volatile.Read(ref opens) >= 5); // headers 可 Open，但不能改变下面的退避判定
             lock (seen) Assert.Contains(seen, d => d >= TimeSpan.FromMilliseconds(2)); // 退避在增长（未被重置）
         }
 

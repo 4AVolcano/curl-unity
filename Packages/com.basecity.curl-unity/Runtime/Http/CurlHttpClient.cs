@@ -541,6 +541,7 @@ namespace CurlUnity.Http
             if (request.MaxRedirects < -1)
                 throw new ArgumentOutOfRangeException(
                     nameof(request.MaxRedirects), "MaxRedirects 仅允许 >= -1（-1 = 不限制）");
+            curlReq.FollowRedirects = request.FollowRedirects;
             if (request.FollowRedirects)
             {
                 CheckSetOpt("CURLOPT_FOLLOWLOCATION",

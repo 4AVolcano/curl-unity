@@ -457,10 +457,12 @@ namespace CurlUnity.UnitTests.TestSupport
             var pin = GCHandle.Alloc(payload, GCHandleType.Pinned);
             try
             {
+                CallbackInProgress = true;
                 return state.HeaderCallback(pin.AddrOfPinnedObject(), (UIntPtr)1, (UIntPtr)payload.Length, state.HeaderData);
             }
             finally
             {
+                CallbackInProgress = false;
                 pin.Free();
             }
         }
@@ -478,10 +480,12 @@ namespace CurlUnity.UnitTests.TestSupport
             var pin = GCHandle.Alloc(payload, GCHandleType.Pinned);
             try
             {
+                CallbackInProgress = true;
                 return state.HeaderCallback(pin.AddrOfPinnedObject(), (UIntPtr)1, (UIntPtr)payload.Length, userdata);
             }
             finally
             {
+                CallbackInProgress = false;
                 pin.Free();
             }
         }

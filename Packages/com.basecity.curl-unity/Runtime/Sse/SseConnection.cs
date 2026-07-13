@@ -169,13 +169,21 @@ namespace CurlUnity.Sse
                             {
                                 hadByte = true;
                                 upSw = Stopwatch.StartNew();
-                                SetState(SseConnectionState.Open);
                             }
+                        }
+
+                        void OnAcceptedHeaders()
+                        {
+                            if (idle > TimeSpan.Zero)
+                            {
+                                try { idleCts.CancelAfter(idle); } catch (ObjectDisposedException) { }
+                            }
+                            SetState(SseConnectionState.Open);
                         }
 
                         var lastEventId = _options.AutoInjectLastEventId ? _parser.LastEventId : null;
                         using var resp = await SseCoreExtensions.RunOneConnectionAsync(
-                            _client, request, _parser, RaiseEvent, OnByte, sendTok, lastEventId)
+                            _client, request, _parser, RaiseEvent, OnByte, OnAcceptedHeaders, sendTok, lastEventId)
                             .ConfigureAwait(false);
 
                         // 非 2xx 已由 RunOneConnectionAsync 的 OnHeadersReceived 抛 SseHttpStatusException

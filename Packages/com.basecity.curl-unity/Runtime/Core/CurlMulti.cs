@@ -142,10 +142,15 @@ namespace CurlUnity.Core
                         _api.SetOptReadData(request.Handle, ptr), request)) return;
             }
 
-            // header callback: 仅在 CaptureHeaders 时设置
-            if (request.CaptureHeaders)
+            // header callback: 捕获原始 headers 或观察完整 header block 时设置。
+            // CONNECT 代理握手头不属于 origin response，交给 libcurl 在 native 层过滤。
+            if (request.CaptureHeaders || request.HeadersReceivedCallback != null)
             {
-                request.HeaderBuffer = new MemoryStream(2048);
+                if (request.CaptureHeaders)
+                    request.HeaderBuffer = new MemoryStream(2048);
+                if (!TrySetOpt("CURLOPT_SUPPRESS_CONNECT_HEADERS",
+                        _api.SetOptLong(request.Handle,
+                            CurlNative.CURLOPT_SUPPRESS_CONNECT_HEADERS, 1), request)) return;
                 if (!TrySetOpt("CURLOPT_HEADERFUNCTION",
                         _api.SetOptHeaderFunction(request.Handle, s_headerCb), request)) return;
                 if (!TrySetOpt("CURLOPT_HEADERDATA",
@@ -443,6 +448,7 @@ namespace CurlUnity.Core
             // 仅 curlCode == OK 时触发（连接失败等 curl 错误不应触发 "headers received"）。
             if (curlCode == CurlNative.CURLE_OK
                 && !request.HeadersReceivedFired
+                && !request.HeaderBlockDeferred
                 && request.HeadersReceivedCallback != null)
             {
                 request.HeadersReceivedFired = true;
@@ -500,8 +506,10 @@ namespace CurlUnity.Core
                 return UIntPtr.Zero;
             }
 
-            // OnHeadersReceived: 首字节到达 → 触发一次用户回调（早于 DataCallback）
-            if (request.HeadersReceivedCallback != null && !request.HeadersReceivedFired)
+            // 防御性兜底：如果 header callback 未能分类响应，则在首个 body 字节前触发。
+            if (request.HeadersReceivedCallback != null
+                && !request.HeadersReceivedFired
+                && !request.HeaderBlockDeferred)
             {
                 request.HeadersReceivedFired = true;
                 try
@@ -585,56 +593,174 @@ namespace CurlUnity.Core
                 return lengthResult;
             }
 
+            byte[] buffer;
             try
             {
-                var buffer = new byte[totalBytes];
+                buffer = new byte[totalBytes];
                 Marshal.Copy(ptr, buffer, 0, totalBytes);
-
-                // FOLLOWLOCATION=1 下，libcurl 会为重定向链里每一次响应（中间
-                // 3xx 和最终响应）分别调用 header callback。每次响应都以一行
-                // 状态行 "HTTP/x.y NNN ..." 开头（HTTP/2、HTTP/3 也一样，libcurl
-                // 会合成相同形式的状态行送进来）。
-                //
-                // 遇到状态行就清空 HeaderBuffer，保证调用方看到的是最终响应
-                // 的 headers，而不是所有 hop 的拼接。HeaderBuffer 可能为 null
-                // （用户不关心响应头），此时只需略过写入。
-                //
-                // 依据: CURLOPT_HEADERFUNCTION 文档明确承诺
-                //   1) 每次调用送入一行完整 header
-                //   2) 状态行和 header 段尾的空行也算"header"
-                //   3) 回调会被所有响应调用而不只是最终响应
-                // HTTP header field-name（RFC 7230 token）不允许包含 '/'，所以
-                // 行首 5 字节等于 "HTTP/" 可以唯一识别状态行。
-                if (request.HeaderBuffer != null)
-                {
-                    if (IsHttpStatusLine(buffer, totalBytes))
-                        request.HeaderBuffer.SetLength(0);
-                    request.HeaderBuffer.Write(buffer, 0, totalBytes);
-                }
             }
             catch (Exception ex)
             {
-                // 捕获中途失败 → 已积累的 headers 是残缺的，比"缺失"更危险（调用方
-                // 无从分辨截断）。丢弃 buffer 让 response.Headers 干净地空缺，并 log
-                // 根因；传输本身继续。
                 CurlLog.Warn(
-                    $"OnHeaderData: header capture failed and was disabled for this request " +
-                    $"(response.Headers will be null): {ex.GetType().Name}: {ex.Message}");
-                try { request.HeaderBuffer?.Dispose(); } catch { /* best-effort */ }
-                request.HeaderBuffer = null;
+                    $"OnHeaderData: failed to copy a native header line; observation for this line was skipped: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+                DisableHeaderCapture(request);
+                return lengthResult;
             }
+
+            var isStatusLine = TryParseHttpStatusCode(buffer, totalBytes, out var statusCode);
+            // Header 捕获是尽力而为的，并且与响应块观察彼此独立。捕获失败时丢弃不完整
+            // 数据，但仍允许状态机以 rawHeaders == null 触发回调。
+            if (request.HeaderBuffer != null)
+            {
+                try
+                {
+                    if (isStatusLine && !request.HeadersReceivedFired)
+                        request.HeaderBuffer.SetLength(0);
+                    request.HeaderBuffer.Write(buffer, 0, totalBytes);
+                }
+                catch (Exception ex)
+                {
+                    CurlLog.Warn(
+                        $"OnHeaderData: header capture failed and was disabled for this request " +
+                        $"(response.Headers will be null): {ex.GetType().Name}: {ex.Message}");
+                    DisableHeaderCapture(request);
+                }
+            }
+
+            // 通知后继续捕获 trailers，但即使后续字节看起来像另一个响应块，
+            // 也只会为已接受的响应通知一次。
+            if (request.HeadersReceivedFired)
+                return lengthResult;
+
+            if (isStatusLine)
+            {
+                request.HeaderBlockStatusCode = statusCode;
+                request.HeaderBlockHasLocation = false;
+                request.HeaderBlockDeferred = false;
+            }
+            else if (request.HeaderBlockStatusCode != 0
+                     && IsLocationHeader(buffer, totalBytes))
+            {
+                request.HeaderBlockHasLocation = true;
+            }
+
+            if (IsHeaderBlockTerminator(buffer, totalBytes))
+                return CompleteHeaderBlock(request, lengthResult);
 
             return lengthResult;
         }
 
-        private static bool IsHttpStatusLine(byte[] buffer, int length)
+        private static UIntPtr CompleteHeaderBlock(CurlRequest request, UIntPtr lengthResult)
         {
-            return length >= 5
-                && buffer[0] == (byte)'H'
-                && buffer[1] == (byte)'T'
-                && buffer[2] == (byte)'T'
-                && buffer[3] == (byte)'P'
-                && buffer[4] == (byte)'/';
+            var statusCode = request.HeaderBlockStatusCode;
+            if (statusCode == 0)
+                return lengthResult;
+
+            request.HeaderBlockStatusCode = 0;
+
+            if (statusCode >= 100 && statusCode < 200)
+            {
+                request.HeaderBlockDeferred = true;
+                request.HeaderBlockHasLocation = false;
+                return lengthResult;
+            }
+
+            if (request.FollowRedirects
+                && statusCode >= 300 && statusCode < 400
+                && request.HeaderBlockHasLocation)
+            {
+                request.HeaderBlockDeferred = true;
+                request.HeaderBlockHasLocation = false;
+                return lengthResult;
+            }
+
+            request.HeaderBlockDeferred = false;
+            request.HeaderBlockHasLocation = false;
+
+            if (request.HeadersReceivedCallback == null)
+                return lengthResult;
+
+            request.HeadersReceivedFired = true;
+            try
+            {
+                request.HeadersReceivedCallback(statusCode, request.HeaderBuffer?.ToArray());
+                return lengthResult;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref request.DownloadError, ex, null);
+                return UIntPtr.Zero;
+            }
+        }
+
+        private static void DisableHeaderCapture(CurlRequest request)
+        {
+            try { request.HeaderBuffer?.Dispose(); } catch { /* 尽力释放 */ }
+            request.HeaderBuffer = null;
+        }
+
+        private static bool TryParseHttpStatusCode(byte[] buffer, int length, out long statusCode)
+        {
+            statusCode = 0;
+            if (length < 9
+                || buffer[0] != (byte)'H'
+                || buffer[1] != (byte)'T'
+                || buffer[2] != (byte)'T'
+                || buffer[3] != (byte)'P'
+                || buffer[4] != (byte)'/')
+                return false;
+
+            var index = 5;
+            while (index < length && buffer[index] != (byte)' ')
+                index++;
+            while (index < length && buffer[index] == (byte)' ')
+                index++;
+
+            if (index + 2 >= length
+                || buffer[index] < (byte)'0' || buffer[index] > (byte)'9'
+                || buffer[index + 1] < (byte)'0' || buffer[index + 1] > (byte)'9'
+                || buffer[index + 2] < (byte)'0' || buffer[index + 2] > (byte)'9')
+                return false;
+
+            statusCode = (buffer[index] - (byte)'0') * 100L
+                + (buffer[index + 1] - (byte)'0') * 10L
+                + buffer[index + 2] - (byte)'0';
+            return true;
+        }
+
+        private static bool IsLocationHeader(byte[] buffer, int length)
+        {
+            const string name = "location";
+            if (length < name.Length + 1 || buffer[name.Length] != (byte)':')
+                return false;
+
+            for (var i = 0; i < name.Length; i++)
+            {
+                var value = buffer[i];
+                if (value >= (byte)'A' && value <= (byte)'Z')
+                    value = (byte)(value + ('a' - 'A'));
+                if (value != (byte)name[i])
+                    return false;
+            }
+
+            // libcurl 会去除 Location 周围的可选空白，且不会跟随空值。这里保持相同判断，
+            // 避免空 Location 导致本应作为最终响应的 3xx 响应块被延后处理。
+            for (var i = name.Length + 1; i < length; i++)
+            {
+                var value = buffer[i];
+                if (value == (byte)' ' || value == (byte)'\t')
+                    continue;
+                return value != (byte)'\r' && value != (byte)'\n';
+            }
+
+            return false;
+        }
+
+        private static bool IsHeaderBlockTerminator(byte[] buffer, int length)
+        {
+            return (length == 2 && buffer[0] == (byte)'\r' && buffer[1] == (byte)'\n')
+                || (length == 1 && buffer[0] == (byte)'\n');
         }
 
 #if UNITY_5_3_OR_NEWER
