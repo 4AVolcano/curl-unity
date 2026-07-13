@@ -161,7 +161,7 @@ namespace CurlUnity.UnitTests.Tests
             var req = new HttpRequest { Url = "http://x" };
             await SseCoreExtensions.RunOneConnectionAsync(
                 client, req, parser, _ => { }, onByteReceived: null,
-                CancellationToken.None, lastEventId: "5");
+                onAcceptedHeaders: null, CancellationToken.None, lastEventId: "5");
             Assert.Contains(client.Captured.Headers,
                 kv => kv.Key == "Last-Event-ID" && kv.Value == "5");
         }
@@ -175,12 +175,12 @@ namespace CurlUnity.UnitTests.Tests
 
             await SseCoreExtensions.RunOneConnectionAsync(
                 client, req, parser, _ => { }, onByteReceived: null,
-                CancellationToken.None, lastEventId: null);
+                onAcceptedHeaders: null, CancellationToken.None, lastEventId: null);
             Assert.DoesNotContain(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
 
             await SseCoreExtensions.RunOneConnectionAsync(
                 client, req, parser, _ => { }, onByteReceived: null,
-                CancellationToken.None, lastEventId: "");
+                onAcceptedHeaders: null, CancellationToken.None, lastEventId: "");
             Assert.DoesNotContain(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
         }
 
@@ -196,7 +196,7 @@ namespace CurlUnity.UnitTests.Tests
             };
             await SseCoreExtensions.RunOneConnectionAsync(
                 client, req, parser, _ => { }, onByteReceived: null,
-                CancellationToken.None, lastEventId: "5");
+                onAcceptedHeaders: null, CancellationToken.None, lastEventId: "5");
             Assert.Single(client.Captured.Headers, kv => kv.Key == "Last-Event-ID");
             Assert.Contains(client.Captured.Headers, kv => kv.Value == "user");
         }

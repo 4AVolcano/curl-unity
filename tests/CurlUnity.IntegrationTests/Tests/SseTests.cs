@@ -125,6 +125,30 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         [Fact]
+        public async Task OpenSse_ReachesOpenDuringSilentHeadersInterval()
+        {
+            var opened = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var received = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var sse = _client.OpenSse(
+                new HttpRequest
+                {
+                    Url = $"{_server.HttpUrl}/sse-silent-headers?silentMs=2000",
+                    TimeoutMs = 0,
+                },
+                onEvent: _ => received.TrySetResult(true),
+                onStateChanged: (_, next) =>
+                {
+                    if (next == SseConnectionState.Open) opened.TrySetResult(true);
+                });
+
+            await WithTimeout(opened.Task, 5000);
+
+            Assert.Equal(SseConnectionState.Open, sse.State);
+            Assert.False(received.Task.IsCompleted);
+            await WithTimeout(received.Task, 5000);
+        }
+
+        [Fact]
         public async Task OpenSse_ReconnectsAndContinuesViaLastEventId()
         {
             var events = new List<SseEvent>();

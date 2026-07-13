@@ -269,6 +269,19 @@ namespace CurlUnity.IntegrationTests.TestServer
                 await Task.Delay(silentMs, ctx.RequestAborted);
             });
 
+            // SSE silent headers: 先提交并 flush 响应头，保持一段完全无 body 字节的静默窗口，再发事件。
+            app.MapGet("/sse-silent-headers", async (HttpContext ctx) =>
+            {
+                ctx.Response.ContentType = "text/event-stream";
+                ctx.Response.Headers["Cache-Control"] = "no-cache";
+                int silentMs = int.TryParse((string)ctx.Request.Query["silentMs"], out var s) ? s : 2000;
+                await ctx.Response.StartAsync(ctx.RequestAborted);
+                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                await Task.Delay(silentMs, ctx.RequestAborted);
+                await ctx.Response.WriteAsync("data: after-silence\n\n", ctx.RequestAborted);
+                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+            });
+
             // SSE 非 2xx：用于测错误重连。
             app.MapGet("/sse-503", () => Results.StatusCode(503));
         }
