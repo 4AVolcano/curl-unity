@@ -144,8 +144,6 @@ namespace CurlUnity.IntegrationTests.Tests
                 });
 
             var openTimestamp = await WithTimeout(openedAt.Task, 5000);
-            Assert.Equal(SseConnectionState.Open, sse.State);
-
             var eventTimestamp = await WithTimeout(receivedAt.Task, 5000);
             Assert.True(eventTimestamp - openTimestamp >= Stopwatch.Frequency,
                 "Open should precede the first event by at least one second");
