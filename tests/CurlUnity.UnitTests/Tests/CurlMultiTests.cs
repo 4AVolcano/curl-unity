@@ -554,6 +554,36 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public void OnHeaderData_StatusLikeBlockAfterCallback_AppendsWithoutRefiring()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var callbackCount = 0;
+            using var req = new CurlRequest(api)
+            {
+                CaptureHeaders = true,
+                HeadersReceivedCallback = (_, _) => callbackCount++,
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 200 OK\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Content-Length: 0\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+            Assert.Equal(1, callbackCount);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 204 No Content\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("X-Late: status-like\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(1, callbackCount);
+            Assert.Equal(
+                Ascii("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n" +
+                      "HTTP/1.1 204 No Content\r\nX-Late: status-like\r\n\r\n"),
+                req.HeaderBuffer.ToArray());
+        }
+
+        [Fact]
         public void OnHeaderData_WhenHeadersReceivedCallbackThrows_RecordsOriginalErrorAndAborts()
         {
             var api = new FakeCurlApi();

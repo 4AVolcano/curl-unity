@@ -609,18 +609,6 @@ namespace CurlUnity.Core
             }
 
             var isStatusLine = TryParseHttpStatusCode(buffer, totalBytes, out var statusCode);
-            if (isStatusLine)
-            {
-                request.HeaderBlockStatusCode = statusCode;
-                request.HeaderBlockHasLocation = false;
-                request.HeaderBlockDeferred = false;
-            }
-            else if (request.HeaderBlockStatusCode != 0
-                     && IsLocationHeader(buffer, totalBytes))
-            {
-                request.HeaderBlockHasLocation = true;
-            }
-
             // Header capture remains best-effort and independent from block observation. A
             // capture failure discards incomplete bytes but still lets the status state machine
             // fire the callback with rawHeaders == null.
@@ -628,7 +616,7 @@ namespace CurlUnity.Core
             {
                 try
                 {
-                    if (isStatusLine)
+                    if (isStatusLine && !request.HeadersReceivedFired)
                         request.HeaderBuffer.SetLength(0);
                     request.HeaderBuffer.Write(buffer, 0, totalBytes);
                 }
@@ -639,6 +627,23 @@ namespace CurlUnity.Core
                         $"(response.Headers will be null): {ex.GetType().Name}: {ex.Message}");
                     DisableHeaderCapture(request);
                 }
+            }
+
+            // Capture remains active after notification for trailers, but the accepted response
+            // is notified at most once even if later bytes resemble another response block.
+            if (request.HeadersReceivedFired)
+                return lengthResult;
+
+            if (isStatusLine)
+            {
+                request.HeaderBlockStatusCode = statusCode;
+                request.HeaderBlockHasLocation = false;
+                request.HeaderBlockDeferred = false;
+            }
+            else if (request.HeaderBlockStatusCode != 0
+                     && IsLocationHeader(buffer, totalBytes))
+            {
+                request.HeaderBlockHasLocation = true;
             }
 
             if (IsHeaderBlockTerminator(buffer, totalBytes))
