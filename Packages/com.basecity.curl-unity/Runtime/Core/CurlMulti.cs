@@ -609,9 +609,8 @@ namespace CurlUnity.Core
             }
 
             var isStatusLine = TryParseHttpStatusCode(buffer, totalBytes, out var statusCode);
-            // Header capture remains best-effort and independent from block observation. A
-            // capture failure discards incomplete bytes but still lets the status state machine
-            // fire the callback with rawHeaders == null.
+            // Header 捕获是尽力而为的，并且与响应块观察彼此独立。捕获失败时丢弃不完整
+            // 数据，但仍允许状态机以 rawHeaders == null 触发回调。
             if (request.HeaderBuffer != null)
             {
                 try
@@ -629,8 +628,8 @@ namespace CurlUnity.Core
                 }
             }
 
-            // Capture remains active after notification for trailers, but the accepted response
-            // is notified at most once even if later bytes resemble another response block.
+            // 通知后继续捕获 trailers，但即使后续字节看起来像另一个响应块，
+            // 也只会为已接受的响应通知一次。
             if (request.HeadersReceivedFired)
                 return lengthResult;
 
@@ -697,7 +696,7 @@ namespace CurlUnity.Core
 
         private static void DisableHeaderCapture(CurlRequest request)
         {
-            try { request.HeaderBuffer?.Dispose(); } catch { /* best-effort */ }
+            try { request.HeaderBuffer?.Dispose(); } catch { /* 尽力释放 */ }
             request.HeaderBuffer = null;
         }
 
@@ -745,9 +744,8 @@ namespace CurlUnity.Core
                     return false;
             }
 
-            // libcurl trims optional whitespace around Location and does not follow an empty
-            // value. Match that decision so an empty Location does not defer an otherwise-final
-            // 3xx response block.
+            // libcurl 会去除 Location 周围的可选空白，且不会跟随空值。这里保持相同判断，
+            // 避免空 Location 导致本应作为最终响应的 3xx 响应块被延后处理。
             for (var i = name.Length + 1; i < length; i++)
             {
                 var value = buffer[i];

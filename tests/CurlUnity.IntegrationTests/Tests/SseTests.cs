@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -127,25 +128,27 @@ namespace CurlUnity.IntegrationTests.Tests
         [Fact]
         public async Task OpenSse_ReachesOpenDuringSilentHeadersInterval()
         {
-            var opened = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var received = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var openedAt = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var receivedAt = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var sse = _client.OpenSse(
                 new HttpRequest
                 {
                     Url = $"{_server.HttpUrl}/sse-silent-headers?silentMs=2000",
                     TimeoutMs = 0,
                 },
-                onEvent: _ => received.TrySetResult(true),
+                onEvent: _ => receivedAt.TrySetResult(Stopwatch.GetTimestamp()),
                 onStateChanged: (_, next) =>
                 {
-                    if (next == SseConnectionState.Open) opened.TrySetResult(true);
+                    if (next == SseConnectionState.Open)
+                        openedAt.TrySetResult(Stopwatch.GetTimestamp());
                 });
 
-            await WithTimeout(opened.Task, 5000);
-
+            var openTimestamp = await WithTimeout(openedAt.Task, 5000);
             Assert.Equal(SseConnectionState.Open, sse.State);
-            Assert.False(received.Task.IsCompleted);
-            await WithTimeout(received.Task, 5000);
+
+            var eventTimestamp = await WithTimeout(receivedAt.Task, 5000);
+            Assert.True(eventTimestamp - openTimestamp >= Stopwatch.Frequency,
+                "Open should precede the first event by at least one second");
         }
 
         [Fact]
