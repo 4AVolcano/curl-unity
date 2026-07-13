@@ -58,6 +58,14 @@ namespace CurlUnity.Core
         internal Action<long, byte[]> HeadersReceivedCallback;
         internal bool HeadersReceivedFired;
 
+        // Header callback state: libcurl delivers one complete line per invocation and may
+        // deliver multiple response blocks (1xx / redirect / final response). FollowRedirects
+        // mirrors the easy-handle option so CurlMulti can defer redirect blocks with Location.
+        internal bool FollowRedirects = true;
+        internal long HeaderBlockStatusCode;
+        internal bool HeaderBlockHasLocation;
+        internal bool HeaderBlockDeferred;
+
         // 取消路径释放 handle 前通知上层（CurlHttpClient 闭包）失效 earlyResponse，
         // 避免 earlyResponse 的 finalizer 对已释放 handle 做 getinfo / double-free。
         internal Action OnHandleFreed;

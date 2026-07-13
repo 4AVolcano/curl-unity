@@ -353,6 +353,198 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Equal((UIntPtr)line.Length, next);
         }
 
+        [Fact]
+        public void OnHeaderData_Complete200_FiresHeadersReceivedBeforeBody()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var events = new System.Collections.Generic.List<string>();
+            using var req = new CurlRequest(api)
+            {
+                HeadersReceivedCallback = (statusCode, rawHeaders) =>
+                {
+                    Assert.Equal(200, statusCode);
+                    Assert.Null(rawHeaders); // observation must not force response-header capture
+                    events.Add("headers");
+                },
+                DataCallback = (_, _, _) => events.Add("body"),
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 200 OK\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Content-Type: text/plain\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(new[] { "headers" }, events);
+
+            api.InvokeWriteCallback(req.Handle, Ascii("body"));
+            Assert.Equal(new[] { "headers", "body" }, events);
+        }
+
+        [Fact]
+        public void Send_WhenHeadersAreObserved_SuppressesProxyConnectHeaders()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            using var req = new CurlRequest(api)
+            {
+                HeadersReceivedCallback = (_, _) => { },
+                OnComplete = _ => { },
+            };
+
+            multi.Send(req);
+
+            var state = api.GetEasyHandleState(req.Handle);
+            Assert.Equal(1, state.LongOptions[CurlNative.CURLOPT_SUPPRESS_CONNECT_HEADERS]);
+        }
+
+        [Fact]
+        public void OnHeaderData_Informational103_IsIgnoredUntilFinalResponseCompletes()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            long observedStatus = 0;
+            byte[] observedHeaders = null;
+            using var req = new CurlRequest(api)
+            {
+                CaptureHeaders = true,
+                HeadersReceivedCallback = (statusCode, rawHeaders) =>
+                {
+                    observedStatus = statusCode;
+                    observedHeaders = rawHeaders;
+                },
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 103 Early Hints\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Link: </app.css>; rel=preload\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(0, observedStatus);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 200 OK\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Content-Type: text/event-stream\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(200, observedStatus);
+            Assert.Equal(
+                Ascii("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"),
+                observedHeaders);
+        }
+
+        [Fact]
+        public void OnHeaderData_Followed302_IsIgnoredUntilFinalResponseCompletes()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var observedStatuses = new System.Collections.Generic.List<long>();
+            using var req = new CurlRequest(api)
+            {
+                CaptureHeaders = true,
+                HeadersReceivedCallback = (statusCode, _) => observedStatuses.Add(statusCode),
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 302 Found\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Location: /final\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Empty(observedStatuses);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/2 200\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(new long[] { 200 }, observedStatuses);
+        }
+
+        [Fact]
+        public async Task OnHeaderData_RedirectFollowingDisabled_FiresCompleted302Block()
+        {
+            var api = new FakeCurlApi();
+            var callbackFired = false;
+            var firedBeforeCompletionWasQueued = false;
+            var droveResponse = false;
+            api.OnMultiPerform = multiHandle =>
+            {
+                var handle = api.GetFirstActiveHandle(multiHandle);
+                if (handle == IntPtr.Zero || droveResponse)
+                    return;
+
+                droveResponse = true;
+                api.GetEasyHandleState(handle).ResponseCode = 302;
+                api.InvokeHeaderCallback(handle, Ascii("HTTP/1.1 302 Found\r\n"));
+                api.InvokeHeaderCallback(handle, Ascii("Location: /manual\r\n"));
+                api.InvokeHeaderCallback(handle, Ascii("\r\n"));
+                firedBeforeCompletionWasQueued = callbackFired;
+                api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+            };
+
+            using var client = new CurlHttpClient(api);
+            using var response = await client.SendAsync(new HttpRequest
+            {
+                Url = "http://example.invalid/",
+                FollowRedirects = false,
+                EnableResponseHeaders = true,
+                OnHeadersReceived = earlyResponse =>
+                {
+                    Assert.Equal(302, earlyResponse.StatusCode);
+                    callbackFired = true;
+                },
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(firedBeforeCompletionWasQueued,
+                "disabled redirects must expose the completed 302 block before transfer completion");
+        }
+
+        [Fact]
+        public void OnHeaderData_Trailers_DoNotFireHeadersReceivedAgain()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var callbackCount = 0;
+            using var req = new CurlRequest(api)
+            {
+                CaptureHeaders = true,
+                HeadersReceivedCallback = (_, _) => callbackCount++,
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 200 OK\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Transfer-Encoding: chunked\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+            Assert.Equal(1, callbackCount);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("Digest: sha-256=:abc=\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(1, callbackCount);
+        }
+
+        [Fact]
+        public void OnHeaderData_WhenHeadersReceivedCallbackThrows_RecordsOriginalErrorAndAborts()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var expected = new IOException("headers callback failed");
+            using var req = new CurlRequest(api)
+            {
+                CaptureHeaders = true,
+                HeadersReceivedCallback = (_, _) => throw expected,
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 200 OK\r\n"));
+            var returned = api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(UIntPtr.Zero, returned);
+            Assert.Same(expected, req.DownloadError);
+        }
+
         // ================================================================
         // 连接数上限 (CURLMOPT_MAX_TOTAL_CONNECTIONS / MAX_HOST_CONNECTIONS)
         // ================================================================
@@ -392,6 +584,8 @@ namespace CurlUnity.UnitTests.Tests
         // ================================================================
         // Helpers
         // ================================================================
+
+        private static byte[] Ascii(string value) => System.Text.Encoding.ASCII.GetBytes(value);
 
         private sealed class ThrowOnReadStream : Stream
         {
