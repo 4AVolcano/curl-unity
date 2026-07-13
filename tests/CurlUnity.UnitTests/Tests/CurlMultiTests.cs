@@ -443,6 +443,7 @@ namespace CurlUnity.UnitTests.Tests
             using var req = new CurlRequest(api)
             {
                 CaptureHeaders = true,
+                FollowRedirects = true,
                 HeadersReceivedCallback = (statusCode, _) => observedStatuses.Add(statusCode),
                 OnComplete = _ => { },
             };
@@ -460,6 +461,31 @@ namespace CurlUnity.UnitTests.Tests
             Assert.Equal(new long[] { 200 }, observedStatuses);
         }
 
+        [Fact]
+        public void OnHeaderData_CoreDefaultWithoutFollowLocation_FiresCompleted302BlockOnce()
+        {
+            var api = new FakeCurlApi();
+            using var multi = new CurlMulti(api);
+            var observedStatuses = new System.Collections.Generic.List<long>();
+            using var req = new CurlRequest(api)
+            {
+                HeadersReceivedCallback = (statusCode, _) => observedStatuses.Add(statusCode),
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+
+            Assert.DoesNotContain(
+                CurlNative.CURLOPT_FOLLOWLOCATION,
+                api.GetEasyHandleState(req.Handle).LongOptions.Keys);
+
+            api.InvokeHeaderCallback(req.Handle, Ascii("HTTP/1.1 302 Found\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("Location: /manual\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+            api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
+
+            Assert.Equal(new long[] { 302 }, observedStatuses);
+        }
+
         [Theory]
         [InlineData("Location:\r\n")]
         [InlineData("Location: \t \r\n")]
@@ -472,6 +498,7 @@ namespace CurlUnity.UnitTests.Tests
             using var req = new CurlRequest(api)
             {
                 CaptureHeaders = true,
+                FollowRedirects = true,
                 HeadersReceivedCallback = (statusCode, _) => observedStatuses.Add(statusCode),
                 OnComplete = _ => { },
             };
