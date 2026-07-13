@@ -608,11 +608,6 @@ namespace CurlUnity.Core
                 return lengthResult;
             }
 
-            // Once the accepted response block fired the callback, later header-callback lines
-            // are trailers. They must neither mutate the accepted raw headers nor refire.
-            if (request.HeadersReceivedFired)
-                return lengthResult;
-
             var isStatusLine = TryParseHttpStatusCode(buffer, totalBytes, out var statusCode);
             if (isStatusLine)
             {

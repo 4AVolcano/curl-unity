@@ -547,6 +547,10 @@ namespace CurlUnity.UnitTests.Tests
             api.InvokeHeaderCallback(req.Handle, Ascii("\r\n"));
 
             Assert.Equal(1, callbackCount);
+            Assert.Equal(
+                Ascii("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" +
+                      "Digest: sha-256=:abc=\r\n\r\n"),
+                req.HeaderBuffer.ToArray());
         }
 
         [Fact]
