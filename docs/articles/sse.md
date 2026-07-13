@@ -80,6 +80,12 @@ using var sse = client.OpenSse(async ct =>
 
 要点：缺省自动注入 `Last-Event-ID`（取自已确认 id）；非 2xx 经 `OnError` 收到 `SseHttpStatusException`、空闲超时收到 `TimeoutException`、网络错收到 `CurlHttpException`，随后都自动重连；**`204 No Content` 视为服务端要求停止，直接关闭、不重连**；`Dispose()` 取消在飞请求、停止重连、状态置 `Closed`。**回调全在后台线程，调用方自行 marshal 到主线程，且回调内不应抛异常（见下「终止与可观测性」）。**
 
+### Open 与空闲计时语义
+
+`Open` 表示本轮已收到并接受最终响应头：状态码是非 204 的 2xx。状态在响应头完整结束时转换，**不等待第一块 body 数据**；因此服务端只 flush 响应头、暂时不发送事件或心跳时，连接也会进入 `Open`。非 2xx 不会进入 `Open`，204 则直接关闭。
+
+`Open` 不表示已经收到 body，也不表示已满足下节的退避重置条件。`IdleTimeout` 仍是 I/O 静默计时：计时器在请求开始前启用，接受响应头时刷新，之后每块 body 数据（包括注释心跳）都会再次刷新。因而静默流进入 `Open` 后，如果持续没有 body 数据或心跳，会在从接受响应头起经过 `IdleTimeout` 后判定超时并重连。
+
 ### 退避与重置语义
 
 每轮(重)连的实际等待按以下顺序确定：
@@ -174,7 +180,7 @@ while (!ct.IsCancellationRequested)
 
 ## 响应头就绪回调（OnHeadersReceived）
 
-`OnHeadersReceived` 是核心 HTTP 层的通用能力，SSE 内部用它实现非 2xx 快速失败。业务代码如需在流式下载等场景下提前检查状态码，也可直接使用：
+`OnHeadersReceived` 是核心 HTTP 层的通用能力：最终响应头完整结束后、任何 body 数据交付前触发一次。它不等待第一块 body，因此保持静默的流式响应也会触发。SSE 内部用它实现非 2xx 快速失败。业务代码如需在流式下载等场景下提前检查状态码，也可直接使用：
 
 ```csharp
 var req = new HttpRequest
@@ -182,7 +188,7 @@ var req = new HttpRequest
     Url = streamUrl,
     OnHeadersReceived = resp =>
     {
-        // 所有响应头到达、body 尚未开始时触发一次
+        // 最终响应头完整结束、body 尚未开始时触发一次
         // resp 与 SendAsync 返回的是同一实例，此时 Body 为 null
         if (resp.StatusCode != 200)
             throw new Exception($"unexpected {resp.StatusCode}");
@@ -194,6 +200,7 @@ using var resp = await client.SendAsync(req);
 ```
 
 - 回调中 throw 即中止传输，异常透传给 `SendAsync` 的 Task。
-- HEAD / 204 等无 body 的响应也会触发。
+- 自动跟随重定向时，中间响应不会触发；仅最终响应触发一次。
+- HEAD / 204 等无 body 的响应也会触发；触发不依赖 body 数据到达。
 - `EnableResponseHeaders = true` 时回调中 `resp.Headers` 可用；否则为 null，但 `StatusCode` / `ContentType` / `Version` 等 getinfo 属性始终可用。
 - **SSE 层已接管此回调**，使用 `ReadServerSentEventsAsync` / `OpenSse` 时不能再设 `OnHeadersReceived`（与 `OnDataReceived` 同策略）。

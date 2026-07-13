@@ -162,7 +162,8 @@ namespace CurlUnity.Http
         public Action<byte[], int, int> OnDataReceived { get; set; }
 
         /// <summary>
-        /// 响应头就绪回调。所有响应头到达后、第一块 body 数据之前调用一次。
+        /// 最终响应头就绪回调。最终响应的 header block 完整结束后调用一次，且先于任何
+        /// body 数据交付；不需要等待第一块 body，因此保持静默的流式响应也会触发。
         /// 回调参数是 <see cref="IHttpResponse"/>——与 <see cref="IHttpClient.SendAsync"/>
         /// 最终返回的是同一实例。回调时 <see cref="IHttpResponse.StatusCode"/>、
         /// <see cref="IHttpResponse.ContentType"/>、<see cref="IHttpResponse.Version"/> 等
@@ -173,7 +174,8 @@ namespace CurlUnity.Http
         /// <remarks>
         /// <para>在后台线程调用。回调抛异常等同于 <see cref="OnDataReceived"/> 抛异常——
         /// 中止传输，异常原样透传给 <c>SendAsync</c> Task。</para>
-        /// <para>HEAD 请求或 204 等无 body 的响应也会触发本回调（在传输完成时）。</para>
+        /// <para>自动跟随重定向时，中间响应不会触发；仅最终响应触发一次。HEAD 请求或
+        /// 204 等无 body 的响应同样会触发，触发不依赖 body 数据到达。</para>
         /// </remarks>
         public Action<IHttpResponse> OnHeadersReceived { get; set; }
 
