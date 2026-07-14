@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 using CurlUnity.Core;
+using CurlUnity.Diagnostics;
 using CurlUnity.Native;
 
 namespace CurlUnity.Http
@@ -10,6 +11,7 @@ namespace CurlUnity.Http
     internal class HttpResponse : IHttpResponse
     {
         private readonly ICurlApi _api;
+        private readonly CurlLogger _logger;
         // 串行化 getinfo 与 Dispose/finalizer：惰性属性可能在任意线程被读，
         // 不加锁的话「检查非零 → 并发 cleanup → native 拿到已释放 handle」
         // 就是 use-after-free。getinfo 是纯内存读，锁开销可忽略。
@@ -23,13 +25,14 @@ namespace CurlUnity.Http
         private IReadOnlyDictionary<string, string[]> _parsedHeaders;
 
         internal HttpResponse(CurlResponse raw)
-            : this(CurlNativeApi.Instance, raw)
+            : this(CurlNativeApi.Instance, raw, null)
         {
         }
 
-        internal HttpResponse(ICurlApi api, CurlResponse raw)
+        internal HttpResponse(ICurlApi api, CurlResponse raw, CurlLogger logger = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            _logger = logger ?? CurlLogger.Default;
             _easyHandle = raw.EasyHandle;
             _statusCode = raw.StatusCode;
             _body = raw.Body;
@@ -48,9 +51,11 @@ namespace CurlUnity.Http
         /// <see cref="FinalizeTransfer"/> 提升为完整所有权。取消/错误路径下 handle 由
         /// 请求侧释放，通过 <see cref="InvalidateHandle"/> 置零避免 UAF。
         /// </summary>
-        internal HttpResponse(ICurlApi api, IntPtr easyHandle, long statusCode, byte[] rawHeaders)
+        internal HttpResponse(ICurlApi api, IntPtr easyHandle, long statusCode,
+            byte[] rawHeaders, CurlLogger logger = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            _logger = logger ?? CurlLogger.Default;
             _easyHandle = easyHandle;
             _statusCode = statusCode;
             _rawHeaders = rawHeaders;
@@ -202,7 +207,7 @@ namespace CurlUnity.Http
             if (handle == IntPtr.Zero) return;
 
             if (fromFinalizer)
-                CurlLog.Warn(
+                _logger.Warning(CurlLogCategory.Core,
                     "HttpResponse was garbage-collected without Dispose(); " +
                     "the native easy handle was reclaimed by the finalizer. " +
                     "Dispose responses explicitly (e.g. with `using`) to avoid native memory pressure.");

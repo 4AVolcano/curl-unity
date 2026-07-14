@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using CurlUnity.Core;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.Native;
 using CurlUnity.UnitTests.TestSupport;
@@ -21,9 +23,41 @@ namespace CurlUnity.UnitTests.Tests
     /// </summary>
     public class CurlMultiTests
     {
+        [Fact]
+        public void Cancel_RemoveFailure_UsesInjectedLogger()
+        {
+            var api = new FakeCurlApi();
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions
+            {
+                Level = CurlLogLevel.Error,
+                Sink = sink,
+            });
+            using var multi = new CurlMulti(api, logger: logger);
+            var req = new CurlRequest(api, logger) { OnComplete = _ => { } };
+            multi.Send(req);
+            api.MultiRemoveHandleResult = CurlNative.CURLE_OK + 1;
+
+            multi.Cancel(req);
+
+            var entry = Assert.Single(sink.Entries);
+            Assert.Equal(CurlLogLevel.Error, entry.Level);
+            Assert.Equal(CurlLogCategory.Core, entry.Category);
+            Assert.Contains("curl_multi_remove_handle on cancel", entry.Message);
+
+            api.MultiRemoveHandleResult = CurlNative.CURLE_OK;
+        }
+
         // ================================================================
         // Cancel() 的 leak-over-crash 分支
         // ================================================================
+
+        private sealed class CollectingSink : ICurlLogSink
+        {
+            public List<CurlLogEntry> Entries { get; } = new List<CurlLogEntry>();
+
+            public void Write(CurlLogEntry entry) => Entries.Add(entry);
+        }
 
         [Fact]
         public void Cancel_WhenSubmitted_NormalPath_DisposesHandleAfterRemove()

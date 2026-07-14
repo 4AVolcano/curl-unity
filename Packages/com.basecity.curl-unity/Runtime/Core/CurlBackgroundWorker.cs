@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Threading;
+using CurlUnity.Diagnostics;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
@@ -8,6 +9,7 @@ namespace CurlUnity.Core
     internal class CurlBackgroundWorker : IDisposable
     {
         private readonly CurlMulti _multi;
+        private readonly CurlLogger _logger;
         private readonly ConcurrentQueue<CurlRequest> _pendingRequests = new();
         private readonly ConcurrentQueue<CurlRequest> _pendingCancels = new();
         private Thread _thread;
@@ -49,7 +51,7 @@ namespace CurlUnity.Core
         }
 
         public CurlBackgroundWorker()
-            : this(CurlNativeApi.Instance)
+            : this(CurlNativeApi.Instance, logger: null)
         {
         }
 
@@ -57,9 +59,11 @@ namespace CurlUnity.Core
         /// <param name="maxHostConnections">透传 <see cref="CurlMulti"/>；0 = 不限。</param>
         internal CurlBackgroundWorker(ICurlApi api,
             int maxTotalConnections = CurlMulti.DefaultMaxTotalConnections,
-            int maxHostConnections = CurlMulti.DefaultMaxHostConnections)
+            int maxHostConnections = CurlMulti.DefaultMaxHostConnections,
+            CurlLogger logger = null)
         {
-            _multi = new CurlMulti(api, maxTotalConnections, maxHostConnections);
+            _logger = logger ?? CurlLogger.Default;
+            _multi = new CurlMulti(api, maxTotalConnections, maxHostConnections, _logger);
         }
 
         public void Start()
@@ -159,7 +163,7 @@ namespace CurlUnity.Core
             }
             else
             {
-                CurlLog.Error(
+                _logger.Error(CurlLogCategory.Core,
                     $"CurlBackgroundWorker.Dispose: worker thread did not exit within {joinTimeout}ms. " +
                     "This usually indicates a user callback (e.g. HttpRequest.OnDataReceived) is blocking. " +
                     "Skipping curl_multi_cleanup to avoid use-after-free — the multi handle will be reclaimed by the OS on process exit. " +
@@ -198,7 +202,7 @@ namespace CurlUnity.Core
                 catch (Exception ex)
                 {
                     consecutiveFailures++;
-                    CurlLog.Error(
+                    _logger.Error(CurlLogCategory.Core,
                         $"CurlBackgroundWorker: unhandled exception in worker loop " +
                         $"({consecutiveFailures}/{maxConsecutiveFailures}): {ex}");
                     if (consecutiveFailures >= maxConsecutiveFailures && !_stop)
@@ -219,7 +223,7 @@ namespace CurlUnity.Core
         {
             _faultCause = cause;
             Volatile.Write(ref _faultedFlag, 1);
-            CurlLog.Error(
+            _logger.Error(CurlLogCategory.Core,
                 "CurlBackgroundWorker: entering faulted state — failing all in-flight and pending requests; " +
                 "subsequent sends on this client will fail fast. See the errors above for the root cause.");
 
@@ -229,7 +233,8 @@ namespace CurlUnity.Core
             }
             catch (Exception ex)
             {
-                CurlLog.Error($"CurlBackgroundWorker: FailAllActive threw during fault handling: {ex}");
+                _logger.Error(CurlLogCategory.Core,
+                    "CurlBackgroundWorker: FailAllActive threw during fault handling.", ex);
             }
 
             DrainPendingAsFaulted();
@@ -243,11 +248,15 @@ namespace CurlUnity.Core
             while (_pendingCancels.TryDequeue(out _)) { }
         }
 
-        private static void FailRequest(CurlRequest request, Exception ex)
+        private void FailRequest(CurlRequest request, Exception ex)
         {
             var resp = new CurlResponse { FailureException = ex };
             try { request.OnComplete?.Invoke(resp); }
-            catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fault-complete: {cbEx}"); }
+            catch (Exception cbEx)
+            {
+                _logger.Warning(CurlLogCategory.Core,
+                    "OnComplete threw during fault-complete.", cbEx);
+            }
             request.Dispose();
         }
 

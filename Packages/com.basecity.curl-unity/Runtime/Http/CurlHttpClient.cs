@@ -31,6 +31,7 @@ namespace CurlUnity.Http
     public class CurlHttpClient : IHttpClient
     {
         private readonly ICurlApi _api;
+        private readonly CurlLogger _logger;
         private readonly CurlBackgroundWorker _worker;
         private readonly ConcurrentDictionary<IntPtr, CancellationTokenRegistration> _cancellations = new();
         private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, byte> _pendingTasks = new();
@@ -45,9 +46,6 @@ namespace CurlUnity.Http
 
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
-
-        /// <summary>开启 libcurl CURLOPT_VERBOSE,内部活动写到 stderr。仅诊断用,默认 false。</summary>
-        public bool Verbose { get; set; } = false;
 
         /// <summary>
         /// 默认 User-Agent。对所有请求生效;请求级 <see cref="HttpRequest.Headers"/>
@@ -69,7 +67,14 @@ namespace CurlUnity.Http
         /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
         public CurlHttpClient(bool enableDiagnostics = false)
             : this(CurlNativeApi.Instance, enableDiagnostics,
-                DefaultMaxTotalConnections, DefaultMaxHostConnections)
+                DefaultMaxTotalConnections, DefaultMaxHostConnections, null)
+        {
+        }
+
+        /// <summary>使用指定的实例级日志配置和默认连接数上限创建 client。</summary>
+        public CurlHttpClient(CurlLogOptions logOptions, bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics,
+                DefaultMaxTotalConnections, DefaultMaxHostConnections, logOptions)
         {
         }
 
@@ -84,25 +89,38 @@ namespace CurlUnity.Http
         public CurlHttpClient(int maxTotalConnections,
             int maxHostConnections = DefaultMaxHostConnections,
             bool enableDiagnostics = false)
-            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections, maxHostConnections)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections,
+                maxHostConnections, null)
+        {
+        }
+
+        /// <summary>使用指定的实例级日志配置和连接数上限创建 client。</summary>
+        public CurlHttpClient(CurlLogOptions logOptions, int maxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections,
+                maxHostConnections, logOptions)
         {
         }
 
         internal CurlHttpClient(ICurlApi api, bool enableDiagnostics = false,
             int maxTotalConnections = DefaultMaxTotalConnections,
-            int maxHostConnections = DefaultMaxHostConnections)
+            int maxHostConnections = DefaultMaxHostConnections,
+            CurlLogOptions logOptions = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            _logger = new CurlLogger(logOptions);
             // 参数校验放在 CurlGlobal.Acquire 之前：校验抛出时全局引用计数不受影响。
             if (maxTotalConnections < 0)
                 throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
             if (maxHostConnections < 0)
                 throw new ArgumentOutOfRangeException(nameof(maxHostConnections), "必须 >= 0（0 = 不限）");
             CurlGlobal.Acquire(_api);
-            CurlCerts.Initialize();
+            CurlCerts.Initialize(_logger);
             if (enableDiagnostics)
                 Diagnostics = new HttpDiagnostics();
-            _worker = new CurlBackgroundWorker(_api, maxTotalConnections, maxHostConnections);
+            _worker = new CurlBackgroundWorker(_api, maxTotalConnections,
+                maxHostConnections, _logger);
             _worker.Start();
         }
 
@@ -159,7 +177,8 @@ namespace CurlUnity.Http
             {
                 curlReq.HeadersReceivedCallback = (statusCode, rawHeaders) =>
                 {
-                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode, rawHeaders);
+                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode,
+                        rawHeaders, _logger);
                     userHeadersCb(earlyResponse);
                 };
                 curlReq.OnHandleFreed = () => earlyResponse?.InvalidateHandle();
@@ -247,7 +266,7 @@ namespace CurlUnity.Http
                     }
                     else
                     {
-                        response = new HttpResponse(_api, curlResp);
+                        response = new HttpResponse(_api, curlResp, _logger);
                     }
                     Diagnostics?.Record(response);
                     if (!tcs.TrySetResult(response))
@@ -301,7 +320,7 @@ namespace CurlUnity.Http
             }
             else
             {
-                CurlLog.Error(
+                _logger.Error(CurlLogCategory.Core,
                     "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
                     "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
             }
@@ -312,7 +331,7 @@ namespace CurlUnity.Http
             if (request == null)
                 throw new ArgumentNullException(nameof(request));
 
-            var curlReq = new CurlRequest(_api);
+            var curlReq = new CurlRequest(_api, _logger);
             try
             {
                 ConfigureCurlRequest(curlReq, request);
@@ -366,8 +385,15 @@ namespace CurlUnity.Http
             if (request.TcpKeepAlive)
                 CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
 
-            // CURLOPT_VERBOSE = 41 (CURLOPTTYPE_LONG + 41)。诊断用,默认关。
-            if (Verbose) _api.SetOptLong(h, 41, 1);
+            // 第一版不接管 libcurl 原生日志；Verbose 仍由 libcurl 直接写 stderr。
+            // 日志选项失败不能改变请求语义，因此只告警、不走 CheckSetOpt。
+            if (_logger.IsEnabled(CurlLogLevel.Verbose))
+            {
+                var rcVerbose = _api.SetOptLong(h, CurlNative.CURLOPT_VERBOSE, 1);
+                if (rcVerbose != CurlNative.CURLE_OK)
+                    _logger.Warning(CurlLogCategory.Core,
+                        $"CURLOPT_VERBOSE returned {rcVerbose}: {_api.GetErrorString(rcVerbose)}");
+            }
 
             // HTTP version（枚举值与 curl 定义一致，直接 cast）
             CheckSetOpt("CURLOPT_HTTP_VERSION",
@@ -578,7 +604,7 @@ namespace CurlUnity.Http
         {
             if (_cookieJar != null) return;
             // 允许并发首次请求；CompareExchange 输的一方本地构造的 jar 需被清理。
-            var fresh = new CurlCookieJar(_api);
+            var fresh = new CurlCookieJar(_api, _logger);
             if (Interlocked.CompareExchange(ref _cookieJar, fresh, null) != null)
                 fresh.Dispose();
         }

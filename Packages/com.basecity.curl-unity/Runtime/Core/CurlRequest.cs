@@ -31,6 +31,7 @@ namespace CurlUnity.Core
     internal class CurlRequest : IDisposable
     {
         internal readonly ICurlApi Api;
+        internal readonly CurlLogger Logger;
         internal readonly IntPtr Handle;
         internal Action<CurlResponse> OnComplete;
 
@@ -74,13 +75,14 @@ namespace CurlUnity.Core
         private bool _handleTransferred;
 
         public CurlRequest()
-            : this(CurlNativeApi.Instance)
+            : this(CurlNativeApi.Instance, null)
         {
         }
 
-        internal CurlRequest(ICurlApi api)
+        internal CurlRequest(ICurlApi api, CurlLogger logger = null)
         {
             Api = api ?? throw new ArgumentNullException(nameof(api));
+            Logger = logger ?? CurlLogger.Default;
             Handle = api.EasyInit();
             if (Handle == IntPtr.Zero)
                 throw new InvalidOperationException("curl_easy_init returned null");

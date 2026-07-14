@@ -4,6 +4,7 @@ using System.Text;
 #if UNITY_ANDROID && !UNITY_EDITOR
 using UnityEngine;
 #endif
+using CurlUnity.Diagnostics;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
@@ -33,15 +34,16 @@ namespace CurlUnity.Core
         /// 主线程构造首个 client（JNI 访问需要已 attach 的线程）。
         /// </para>
         /// </summary>
-        public static void Initialize()
+        public static void Initialize(CurlLogger logger = null)
         {
+            logger ??= CurlLogger.Default;
             if (_initialized) return;
             lock (s_initLock)
             {
                 if (_initialized) return;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-                if (!TryInitAndroid())
+                if (!TryInitAndroid(logger))
                     return; // 失败不置位，保留下次重试机会
 #endif
                 _initialized = true;
@@ -56,12 +58,13 @@ namespace CurlUnity.Core
         /// </summary>
         public static void ApplyTo(IntPtr handle)
         {
-            ApplyTo(handle, CurlNativeApi.Instance);
+            ApplyTo(handle, CurlNativeApi.Instance, CurlLogger.Default);
         }
 
-        internal static void ApplyTo(IntPtr handle, ICurlApi api)
+        internal static void ApplyTo(IntPtr handle, ICurlApi api, CurlLogger logger)
         {
             if (handle == IntPtr.Zero) return;
+            logger ??= CurlLogger.Default;
 
             // Android: use extracted PEM file.
             // 失败仅 log warn，不阻止请求继续——后续 TLS 层的失败会比"静默改变信任
@@ -70,7 +73,8 @@ namespace CurlUnity.Core
             {
                 var rc = api.SetOptString(handle, CurlNative.CURLOPT_CAINFO, _caCertPath);
                 if (rc != CurlNative.CURLE_OK)
-                    CurlLog.Warn($"CurlCerts.ApplyTo: CURLOPT_CAINFO returned {rc}; CA store may not be applied as expected.");
+                    logger.Warning(CurlLogCategory.Certificates,
+                        $"CurlCerts.ApplyTo: CURLOPT_CAINFO returned {rc}; CA store may not be applied as expected.");
             }
 
 #if UNITY_STANDALONE_WIN || UNITY_WSA
@@ -78,13 +82,14 @@ namespace CurlUnity.Core
             var rcSsl = api.SetOptLong(handle, CurlNative.CURLOPT_SSL_OPTIONS,
                 CurlNative.CURLSSLOPT_NATIVE_CA);
             if (rcSsl != CurlNative.CURLE_OK)
-                CurlLog.Warn($"CurlCerts.ApplyTo: CURLOPT_SSL_OPTIONS (NATIVE_CA) returned {rcSsl}; system cert store may not be in use.");
+                logger.Warning(CurlLogCategory.Certificates,
+                    $"CurlCerts.ApplyTo: CURLOPT_SSL_OPTIONS (NATIVE_CA) returned {rcSsl}; system cert store may not be in use.");
 #endif
         }
 
 #if UNITY_ANDROID && !UNITY_EDITOR
         /// <summary>成功（或命中缓存）返回 true；提取失败返回 false，由调用方决定重试。</summary>
-        private static bool TryInitAndroid()
+        private static bool TryInitAndroid(CurlLogger logger)
         {
             var pemPath = Path.Combine(Application.persistentDataPath, "curl_cacerts.pem");
             var versionPath = Path.Combine(Application.persistentDataPath, "curl_cacerts.version");
@@ -92,22 +97,25 @@ namespace CurlUnity.Core
             if (IsCacheValid(versionPath))
             {
                 _caCertPath = pemPath;
-                Debug.Log($"[CurlCerts] 使用缓存证书: {pemPath}");
+                logger.Verbose(CurlLogCategory.Certificates,
+                    $"Using cached system certificates: {pemPath}");
                 return true;
             }
 
             try
             {
-                var pem = ExtractAndroidSystemCerts();
+                var pem = ExtractAndroidSystemCerts(logger);
                 File.WriteAllText(pemPath, pem, Encoding.ASCII);
                 File.WriteAllText(versionPath, GetVersionFingerprint());
                 _caCertPath = pemPath;
-                Debug.Log($"[CurlCerts] 已提取系统证书 -> {pemPath}");
+                logger.Verbose(CurlLogCategory.Certificates,
+                    $"Extracted system certificates to {pemPath}");
                 return true;
             }
             catch (Exception e)
             {
-                Debug.LogError($"[CurlCerts] 提取系统证书失败（下一个 client 构造时将重试）: {e}");
+                logger.Error(CurlLogCategory.Certificates,
+                    "Failed to extract system certificates; the next client construction will retry.", e);
                 return false;
             }
         }
@@ -136,7 +144,7 @@ namespace CurlUnity.Core
             return $"{Application.version}|{SystemInfo.operatingSystem}";
         }
 
-        private static string ExtractAndroidSystemCerts()
+        private static string ExtractAndroidSystemCerts(CurlLogger logger)
         {
             var sb = new StringBuilder(256 * 1024);
 
@@ -174,7 +182,8 @@ namespace CurlUnity.Core
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[CurlCerts] 跳过证书: {e.Message}");
+                    logger.Warning(CurlLogCategory.Certificates,
+                        "Skipped one system certificate during extraction.", e);
                 }
                 finally
                 {
@@ -182,7 +191,8 @@ namespace CurlUnity.Core
                 }
             }
 
-            Debug.Log($"[CurlCerts] 提取了 {count} 个系统 CA 证书");
+            logger.Verbose(CurlLogCategory.Certificates,
+                $"Extracted {count} system CA certificates.");
             return sb.ToString();
         }
 #endif

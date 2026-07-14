@@ -9,6 +9,8 @@ namespace CurlUnity.Core
     /// </summary>
     internal sealed class CurlLogger
     {
+        internal static readonly CurlLogger Default = new CurlLogger(null);
+
         private readonly CurlLogLevel _level;
         private readonly ICurlLogSink _sink;
 
@@ -49,19 +51,6 @@ namespace CurlUnity.Core
                 // Logging is best-effort and must never affect networking or cleanup.
             }
         }
-    }
-
-    // Temporary compatibility facade while call sites are migrated to injected loggers.
-    // It contains no mutable configuration and is removed in the next implementation task.
-    internal static class CurlLog
-    {
-        private static readonly CurlLogger s_default = new CurlLogger(null);
-
-        internal static void Warn(string message)
-            => s_default.Warning(CurlLogCategory.Core, message);
-
-        internal static void Error(string message)
-            => s_default.Error(CurlLogCategory.Core, message);
     }
 
     internal sealed class DefaultCurlLogSink : ICurlLogSink

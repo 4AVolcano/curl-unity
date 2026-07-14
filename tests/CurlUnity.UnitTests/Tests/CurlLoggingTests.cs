@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using CurlUnity.Core;
 using CurlUnity.Diagnostics;
+using CurlUnity.Http;
+using CurlUnity.UnitTests.TestSupport;
 using Xunit;
 
 namespace CurlUnity.UnitTests.Tests
 {
+    [Collection("CurlGlobal")]
     public class CurlLoggingTests
     {
         [Fact]
@@ -98,6 +102,55 @@ namespace CurlUnity.UnitTests.Tests
                 () => logger.Error(CurlLogCategory.Core, "must not escape"));
 
             Assert.Null(exception);
+        }
+
+        [Theory]
+        [InlineData(CurlLogLevel.Warning, false)]
+        [InlineData(CurlLogLevel.Verbose, true)]
+        public void Client_LogLevelControlsNativeVerbose(CurlLogLevel level,
+            bool expectedEnabled)
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api, logOptions: new CurlLogOptions
+            {
+                Level = level,
+                Sink = new CollectingSink(),
+            });
+
+            _ = client.SendAsync(new HttpRequest { Url = "http://example.invalid/" });
+
+            var options = api.GetEasyHandleState(api.LastEasyHandle).LongOptions;
+            Assert.Equal(expectedEnabled, options.ContainsKey(41)); // CURLOPT_VERBOSE
+        }
+
+        [Fact]
+        public async Task Client_NativeVerboseSetupFailure_OnlyLogsWarning()
+        {
+            var api = new FakeCurlApi
+            {
+                SetOptLongHook = (_, option, _) => option == 41 ? 7 : null,
+            };
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                    api.EnqueueCompletion(handle, 0);
+            };
+            var sink = new CollectingSink();
+            using var client = new CurlHttpClient(api, logOptions: new CurlLogOptions
+            {
+                Level = CurlLogLevel.Verbose,
+                Sink = sink,
+            });
+
+            using var response = await client.SendAsync(new HttpRequest
+            {
+                Url = "http://example.invalid/",
+            }).WaitAsync(TimeSpan.FromSeconds(2));
+
+            var warning = Assert.Single(sink.Entries,
+                entry => entry.Level == CurlLogLevel.Warning);
+            Assert.Contains("CURLOPT_VERBOSE", warning.Message);
         }
 
         private sealed class CollectingSink : ICurlLogSink

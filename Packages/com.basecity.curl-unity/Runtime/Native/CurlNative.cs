@@ -42,6 +42,7 @@ namespace CurlUnity.Native
         public const int CURLOPT_HEADERDATA = 10029;
         public const int CURLOPT_READFUNCTION = 20012;
         public const int CURLOPT_READDATA = 10009;
+        public const int CURLOPT_VERBOSE = 41;
         public const int CURLOPT_FOLLOWLOCATION = 52;
         public const int CURLOPT_MAXREDIRS = 68;
         public const int CURLOPT_SUPPRESS_CONNECT_HEADERS = 265;
