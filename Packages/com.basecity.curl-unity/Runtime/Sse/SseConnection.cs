@@ -20,11 +20,13 @@ namespace CurlUnity.Sse
     /// </remarks>
     internal sealed class SseConnection : ISseConnection
     {
+        private const int MaxLoggedCommentChars = 256;
         private static long s_nextConnectionId;
 
         private readonly IHttpClient _client;
         private readonly CurlLogger _logger;
         private readonly bool _verboseLogging;
+        private readonly Action<string> _commentLogger;
         private readonly long _connectionId;
         private readonly Func<CancellationToken, Task<HttpRequest>> _requestFactory;
         private readonly SseConnectionOptions _options;
@@ -67,6 +69,8 @@ namespace CurlUnity.Sse
 
             _logger = new CurlLogger(client.LogOptions);
             _verboseLogging = _logger.IsEnabled(CurlLogLevel.Verbose);
+            if (_verboseLogging)
+                _commentLogger = LogComment;
             _connectionId = Interlocked.Increment(ref s_nextConnectionId);
             if (_verboseLogging)
                 _logger.Verbose(CurlLogCategory.Sse,
@@ -201,7 +205,8 @@ namespace CurlUnity.Sse
 
                         var lastEventId = _options.AutoInjectLastEventId ? _parser.LastEventId : null;
                         using var resp = await SseCoreExtensions.RunOneConnectionAsync(
-                            _client, request, _parser, RaiseEvent, OnByte, OnAcceptedHeaders, sendTok, lastEventId)
+                            _client, request, _parser, RaiseEvent, OnByte, OnAcceptedHeaders, sendTok,
+                            lastEventId, _commentLogger)
                             .ConfigureAwait(false);
 
                         // 非 2xx 已由 RunOneConnectionAsync 的 OnHeadersReceived 抛 SseHttpStatusException
@@ -373,8 +378,14 @@ namespace CurlUnity.Sse
             while (true)
             {
                 int prev = Volatile.Read(ref _state);
+                if (prev == (int)next)
+                {
+                    if (_verboseLogging)
+                        _logger.Verbose(CurlLogCategory.Sse,
+                            $"connection={_connectionId} state={(SseConnectionState)prev}->{next} ignored");
+                    return;
+                }
                 if (prev == (int)SseConnectionState.Closed) return; // 终态，不再变
-                if (prev == (int)next) return;
                 if (Interlocked.CompareExchange(ref _state, (int)next, prev) == prev)
                 {
                     if (_verboseLogging)
@@ -390,6 +401,20 @@ namespace CurlUnity.Sse
                 }
                 // CAS 失败（并发转换）→ 重试
             }
+        }
+
+        private void LogComment(string comment)
+        {
+            if (comment.Length <= MaxLoggedCommentChars)
+            {
+                _logger.Verbose(CurlLogCategory.Sse,
+                    $"connection={_connectionId} comment={comment}");
+                return;
+            }
+
+            _logger.Verbose(CurlLogCategory.Sse,
+                $"connection={_connectionId} comment={comment.Substring(0, MaxLoggedCommentChars)}" +
+                $"... truncated originalChars={comment.Length}");
         }
 
         private void RaiseEvent(SseEvent e)

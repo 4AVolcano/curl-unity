@@ -29,13 +29,19 @@ namespace CurlUnity.UnitTests.Tests
             public int StatusCode = 200;
             public string Bytes;
             public Exception Exception;
+            public int HeaderCallbackCount = 1;
 
             public static Behavior Eof(int status = 200, string bytes = null)
                 => new Behavior { Kind = Kind.Eof, StatusCode = status, Bytes = bytes };
             public static Behavior Throw(Exception ex, string bytes = null)
                 => new Behavior { Kind = Kind.Throw, Exception = ex, Bytes = bytes };
-            public static Behavior Block(string bytes = null)
-                => new Behavior { Kind = Kind.Block, Bytes = bytes };
+            public static Behavior Block(string bytes = null, int headerCallbackCount = 1)
+                => new Behavior
+                {
+                    Kind = Kind.Block,
+                    Bytes = bytes,
+                    HeaderCallbackCount = headerCallbackCount,
+                };
         }
 
         private sealed class ControllableHttpClient : IHttpClient
@@ -65,13 +71,16 @@ namespace CurlUnity.UnitTests.Tests
                 var b = _plan(idx);
 
                 var response = new StubResponse(b.StatusCode);
-                try
+                for (int i = 0; i < b.HeaderCallbackCount; i++)
                 {
-                    request.OnHeadersReceived?.Invoke(response);
-                }
-                finally
-                {
-                    Interlocked.Increment(ref _headersReceived);
+                    try
+                    {
+                        request.OnHeadersReceived?.Invoke(response);
+                    }
+                    finally
+                    {
+                        Interlocked.Increment(ref _headersReceived);
+                    }
                 }
 
                 await BodyGate.WaitAsync(ct).ConfigureAwait(false);
@@ -309,12 +318,73 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task Verbose_LogsRepeatedStateAsIgnored()
+        {
+            var sink = new CollectingSink();
+            var client = new ControllableHttpClient(
+                _ => Behavior.Block(headerCallbackCount: 2),
+                new CurlLogOptions(CurlLogLevel.Verbose, sink));
+            using var conn = new SseConnection(
+                client, Factory(), ZeroDelay(), CancellationToken.None);
+
+            await WaitUntil(() => client.HeadersReceivedCount >= 2);
+            conn.Dispose();
+            await conn.Completion;
+
+            Assert.Contains(sink.Snapshot(), entry =>
+                entry.Category == CurlLogCategory.Sse &&
+                entry.Message.Contains("state=Open->Open ignored"));
+        }
+
+        [Fact]
+        public async Task Verbose_LogsCommentLineWithoutNormalizingIt()
+        {
+            var sink = new CollectingSink();
+            var options = ZeroDelay();
+            options.ShouldReconnect = _ => false;
+            var client = new ControllableHttpClient(
+                _ => Behavior.Eof(bytes: ": keep-alive\n"),
+                new CurlLogOptions(CurlLogLevel.Verbose, sink));
+            using var conn = new SseConnection(
+                client, Factory(), options, CancellationToken.None);
+
+            await conn.Completion;
+
+            Assert.Contains(sink.Snapshot(), entry =>
+                entry.Category == CurlLogCategory.Sse &&
+                entry.Message.Contains("comment=: keep-alive"));
+        }
+
+        [Fact]
+        public async Task Verbose_TruncatesLongCommentLine()
+        {
+            var sink = new CollectingSink();
+            var options = ZeroDelay();
+            options.ShouldReconnect = _ => false;
+            var comment = ":" + new string('x', 300);
+            var client = new ControllableHttpClient(
+                _ => Behavior.Eof(bytes: comment + "\n"),
+                new CurlLogOptions(CurlLogLevel.Verbose, sink));
+            using var conn = new SseConnection(
+                client, Factory(), options, CancellationToken.None);
+
+            await conn.Completion;
+
+            var entry = Assert.Single(sink.Snapshot(), item =>
+                item.Category == CurlLogCategory.Sse &&
+                item.Message.Contains("comment="));
+            Assert.Contains("comment=" + comment.Substring(0, 256), entry.Message);
+            Assert.Contains("truncated originalChars=301", entry.Message);
+            Assert.DoesNotContain(comment, entry.Message);
+        }
+
+        [Fact]
         public async Task Warning_DoesNotLogSseFlow()
         {
             var sink = new CollectingSink();
             var logOptions = new CurlLogOptions(CurlLogLevel.Warning, sink);
             var client = new ControllableHttpClient(
-                _ => Behavior.Eof(204), logOptions);
+                _ => Behavior.Eof(204, ": keep-alive\n"), logOptions);
             using var conn = new SseConnection(
                 client, Factory(), ZeroDelay(), CancellationToken.None);
 
