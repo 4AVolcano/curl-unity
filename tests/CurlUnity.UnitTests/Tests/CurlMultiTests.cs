@@ -28,13 +28,12 @@ namespace CurlUnity.UnitTests.Tests
         {
             var api = new FakeCurlApi();
             var sink = new CollectingSink();
-            var logger = new CurlLogger(new CurlLogOptions
-            {
-                Level = CurlLogLevel.Error,
-                Sink = sink,
-            });
+            var logger = new CurlLogger(new CurlLogOptions(CurlLogLevel.Error, sink));
             using var multi = new CurlMulti(api, logger: logger);
-            var req = new CurlRequest(api, logger) { OnComplete = _ => { } };
+            var req = new CurlRequest(api, logger, requestId: 42)
+            {
+                OnComplete = _ => { },
+            };
             multi.Send(req);
             api.MultiRemoveHandleResult = CurlNative.CURLE_OK + 1;
 
@@ -43,6 +42,7 @@ namespace CurlUnity.UnitTests.Tests
             var entry = Assert.Single(sink.Entries);
             Assert.Equal(CurlLogLevel.Error, entry.Level);
             Assert.Equal(CurlLogCategory.Core, entry.Category);
+            Assert.Equal(42, entry.RequestId);
             Assert.Contains("curl_multi_remove_handle on cancel", entry.Message);
 
             api.MultiRemoveHandleResult = CurlNative.CURLE_OK;
@@ -368,8 +368,14 @@ namespace CurlUnity.UnitTests.Tests
         public void OnHeaderData_WhenBufferWriteFails_DisablesCaptureAndContinuesTransfer()
         {
             var api = new FakeCurlApi();
-            using var multi = new CurlMulti(api);
-            using var req = new CurlRequest(api) { CaptureHeaders = true, OnComplete = _ => { } };
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions(CurlLogLevel.Warning, sink));
+            using var multi = new CurlMulti(api, logger: logger);
+            using var req = new CurlRequest(api, logger, requestId: 43)
+            {
+                CaptureHeaders = true,
+                OnComplete = _ => { },
+            };
             multi.Send(req);
 
             // 模拟 HeaderBuffer 写入失败(ObjectDisposedException): 传输必须继续,
@@ -381,6 +387,7 @@ namespace CurlUnity.UnitTests.Tests
 
             Assert.Equal((UIntPtr)line.Length, returned);
             Assert.Null(req.HeaderBuffer);  // capture 已禁用 → response.Headers 将为 null
+            Assert.Equal(43, Assert.Single(sink.Entries).RequestId);
 
             // 后续 header 块同样只消费不中断
             var next = api.InvokeHeaderCallback(req.Handle, line);

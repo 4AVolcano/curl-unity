@@ -69,8 +69,25 @@ namespace CurlUnity.UnitTests.Tests
             var defaults = new CurlLogOptions();
             Assert.Equal(CurlLogLevel.Warning, defaults.Level);
             Assert.Null(defaults.Sink);
-            Assert.True(typeof(CurlLogOptions).GetProperty(nameof(CurlLogOptions.Level)).CanWrite);
-            Assert.True(typeof(CurlLogOptions).GetProperty(nameof(CurlLogOptions.Sink)).CanWrite);
+            Assert.False(typeof(CurlLogOptions).GetProperty(nameof(CurlLogOptions.Level)).CanWrite);
+            Assert.False(typeof(CurlLogOptions).GetProperty(nameof(CurlLogOptions.Sink)).CanWrite);
+            Assert.NotNull(typeof(CurlLogOptions).GetConstructor(
+                new[] { typeof(CurlLogLevel), typeof(ICurlLogSink) }));
+
+            var clientLogOptions = typeof(IHttpClient).GetProperty("LogOptions");
+            Assert.NotNull(clientLogOptions);
+            Assert.Equal(typeof(CurlLogOptions), clientLogOptions.PropertyType);
+            Assert.False(clientLogOptions.CanWrite);
+
+            Assert.NotNull(typeof(CurlLogEntry).GetConstructor(new[]
+            {
+                typeof(DateTimeOffset),
+                typeof(CurlLogLevel),
+                typeof(CurlLogCategory),
+                typeof(string),
+                typeof(Exception),
+                typeof(long?),
+            }));
         }
     }
 }

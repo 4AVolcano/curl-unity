@@ -30,7 +30,7 @@ namespace CurlUnity.Diagnostics
     /// <summary>A structured log entry delivered to <see cref="ICurlLogSink"/>.</summary>
     public readonly struct CurlLogEntry
     {
-        internal CurlLogEntry(DateTimeOffset timestampUtc, CurlLogLevel level,
+        public CurlLogEntry(DateTimeOffset timestampUtc, CurlLogLevel level,
             CurlLogCategory category, string message, Exception exception,
             long? requestId)
         {
@@ -60,13 +60,20 @@ namespace CurlUnity.Diagnostics
         void Write(CurlLogEntry entry);
     }
 
-    /// <summary>Logging configuration copied when a <c>CurlHttpClient</c> is constructed.</summary>
+    /// <summary>Immutable logging configuration associated with an HTTP client instance.</summary>
     public sealed class CurlLogOptions
     {
+        public CurlLogOptions(CurlLogLevel level = CurlLogLevel.Warning,
+            ICurlLogSink sink = null)
+        {
+            Level = level;
+            Sink = sink;
+        }
+
         /// <summary>The maximum verbosity to emit. Defaults to <see cref="CurlLogLevel.Warning"/>.</summary>
-        public CurlLogLevel Level { get; set; } = CurlLogLevel.Warning;
+        public CurlLogLevel Level { get; }
 
         /// <summary>The destination for log entries. Null selects the platform default.</summary>
-        public ICurlLogSink Sink { get; set; }
+        public ICurlLogSink Sink { get; }
     }
 }

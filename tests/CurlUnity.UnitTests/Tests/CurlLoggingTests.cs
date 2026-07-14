@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading.Tasks;
 using CurlUnity.Core;
 using CurlUnity.Diagnostics;
 using CurlUnity.Http;
+using CurlUnity.Native;
 using CurlUnity.UnitTests.TestSupport;
 using Xunit;
 
@@ -31,11 +33,7 @@ namespace CurlUnity.UnitTests.Tests
             int expectedCount)
         {
             var sink = new CollectingSink();
-            var logger = new CurlLogger(new CurlLogOptions
-            {
-                Level = configuredLevel,
-                Sink = sink,
-            });
+            var logger = new CurlLogger(new CurlLogOptions(configuredLevel, sink));
 
             logger.Error(CurlLogCategory.Core, "error");
             logger.Warning(CurlLogCategory.Http, "warning");
@@ -45,25 +43,17 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
-        public void Logger_SnapshotsOptions()
+        public void Logger_UsesImmutableOptions()
         {
             var first = new CollectingSink();
-            var second = new CollectingSink();
-            var options = new CurlLogOptions
-            {
-                Level = CurlLogLevel.Warning,
-                Sink = first,
-            };
+            var options = new CurlLogOptions(CurlLogLevel.Warning, first);
             var logger = new CurlLogger(options);
 
-            options.Level = CurlLogLevel.Verbose;
-            options.Sink = second;
             logger.Verbose(CurlLogCategory.Http, "hidden");
             logger.Warning(CurlLogCategory.Core, "shown");
 
             var entry = Assert.Single(first.Entries);
             Assert.Equal(CurlLogLevel.Warning, entry.Level);
-            Assert.Empty(second.Entries);
         }
 
         [Fact]
@@ -71,11 +61,7 @@ namespace CurlUnity.UnitTests.Tests
         {
             var before = DateTimeOffset.UtcNow;
             var sink = new CollectingSink();
-            var logger = new CurlLogger(new CurlLogOptions
-            {
-                Level = CurlLogLevel.Verbose,
-                Sink = sink,
-            });
+            var logger = new CurlLogger(new CurlLogOptions(CurlLogLevel.Verbose, sink));
             var exception = new InvalidOperationException("boom");
 
             logger.Error(CurlLogCategory.Certificates, "failed", exception, 42);
@@ -92,11 +78,8 @@ namespace CurlUnity.UnitTests.Tests
         [Fact]
         public void Logger_SwallowsSinkExceptions()
         {
-            var logger = new CurlLogger(new CurlLogOptions
-            {
-                Level = CurlLogLevel.Error,
-                Sink = new ThrowingSink(),
-            });
+            var logger = new CurlLogger(new CurlLogOptions(
+                CurlLogLevel.Error, new ThrowingSink()));
 
             var exception = Record.Exception(
                 () => logger.Error(CurlLogCategory.Core, "must not escape"));
@@ -111,24 +94,24 @@ namespace CurlUnity.UnitTests.Tests
             bool expectedEnabled)
         {
             var api = new FakeCurlApi();
-            using var client = new CurlHttpClient(api, logOptions: new CurlLogOptions
-            {
-                Level = level,
-                Sink = new CollectingSink(),
-            });
+            using var client = new CurlHttpClient(api, logOptions: new CurlLogOptions(
+                level, new CollectingSink()));
 
             _ = client.SendAsync(new HttpRequest { Url = "http://example.invalid/" });
 
             var options = api.GetEasyHandleState(api.LastEasyHandle).LongOptions;
-            Assert.Equal(expectedEnabled, options.ContainsKey(41)); // CURLOPT_VERBOSE
+            Assert.Equal(expectedEnabled,
+                options.ContainsKey(CurlNative.CURLOPT_VERBOSE));
         }
 
         [Fact]
         public async Task Client_NativeVerboseSetupFailure_OnlyLogsWarning()
         {
+            const int setOptFailure = 7;
             var api = new FakeCurlApi
             {
-                SetOptLongHook = (_, option, _) => option == 41 ? 7 : null,
+                SetOptLongHook = (_, option, _) =>
+                    option == CurlNative.CURLOPT_VERBOSE ? setOptFailure : null,
             };
             api.OnMultiPerform = multi =>
             {
@@ -137,11 +120,8 @@ namespace CurlUnity.UnitTests.Tests
                     api.EnqueueCompletion(handle, 0);
             };
             var sink = new CollectingSink();
-            using var client = new CurlHttpClient(api, logOptions: new CurlLogOptions
-            {
-                Level = CurlLogLevel.Verbose,
-                Sink = sink,
-            });
+            using var client = new CurlHttpClient(api, logOptions: new CurlLogOptions(
+                CurlLogLevel.Verbose, sink));
 
             using var response = await client.SendAsync(new HttpRequest
             {
@@ -151,6 +131,24 @@ namespace CurlUnity.UnitTests.Tests
             var warning = Assert.Single(sink.Entries,
                 entry => entry.Level == CurlLogLevel.Warning);
             Assert.Contains("CURLOPT_VERBOSE", warning.Message);
+            Assert.Equal(CurlLogCategory.Http, warning.Category);
+            Assert.NotNull(warning.RequestId);
+        }
+
+        [Fact]
+        public void DefaultSinkFormat_IncludesTimestampUtc()
+        {
+            var timestamp = new DateTimeOffset(
+                2026, 7, 14, 12, 34, 56, TimeSpan.Zero);
+            var entry = new CurlLogEntry(timestamp, CurlLogLevel.Warning,
+                CurlLogCategory.Core, "message", null, 42);
+            var formatter = typeof(DefaultCurlLogSink).GetMethod(
+                "FormatMessage", BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.NotNull(formatter);
+            var formatted = Assert.IsType<string>(formatter.Invoke(
+                null, new object[] { entry }));
+            Assert.Contains(timestamp.ToString("O"), formatted);
         }
 
         private sealed class CollectingSink : ICurlLogSink

@@ -96,10 +96,11 @@ namespace CurlUnity.Core
             // (GCHandle) 去 FromIntPtr。如果这里 Free 掉 GCHandle、handle 置零，
             // 下一次回调就会踩一个无效 handle，大概率 crash。
             // 宁可泄漏 share handle + GCHandle，也别引入 use-after-free。
-            _logger.Error(CurlLogCategory.Core,
-                $"curl_share_cleanup failed (code {rc}): {_api.GetShareErrorString(rc)}. " +
-                "Leaking the share handle and its GCHandle to avoid UAF from lock/unlock callbacks. " +
-                "This usually indicates an easy handle is still associated with the share — check CurlHttpClient.Dispose ordering.");
+            if (_logger.IsEnabled(CurlLogLevel.Error))
+                _logger.Error(CurlLogCategory.Core,
+                    $"curl_share_cleanup failed (code {rc}): {_api.GetShareErrorString(rc)}. " +
+                    "Leaking the share handle and its GCHandle to avoid UAF from lock/unlock callbacks. " +
+                    "This usually indicates an easy handle is still associated with the share — check CurlHttpClient.Dispose ordering.");
         }
 
         private void Check(string name, int rc)
@@ -123,8 +124,10 @@ namespace CurlUnity.Core
             }
             catch (Exception ex)
             {
-                (self?._logger ?? CurlLogger.Default).Error(CurlLogCategory.Core,
-                    "CurlCookieJar.LockCallback threw.", ex);
+                var logger = self?._logger ?? CurlLogger.Default;
+                if (logger.IsEnabled(CurlLogLevel.Error))
+                    logger.Error(CurlLogCategory.Core,
+                        "CurlCookieJar.LockCallback threw.", ex);
             }
         }
 
@@ -141,8 +144,10 @@ namespace CurlUnity.Core
             }
             catch (Exception ex)
             {
-                (self?._logger ?? CurlLogger.Default).Error(CurlLogCategory.Core,
-                    "CurlCookieJar.UnlockCallback threw.", ex);
+                var logger = self?._logger ?? CurlLogger.Default;
+                if (logger.IsEnabled(CurlLogLevel.Error))
+                    logger.Error(CurlLogCategory.Core,
+                        "CurlCookieJar.UnlockCallback threw.", ex);
             }
         }
     }

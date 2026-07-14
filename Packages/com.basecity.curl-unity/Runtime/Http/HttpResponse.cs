@@ -206,7 +206,7 @@ namespace CurlUnity.Http
             }
             if (handle == IntPtr.Zero) return;
 
-            if (fromFinalizer)
+            if (fromFinalizer && _logger.IsEnabled(CurlLogLevel.Warning))
                 _logger.Warning(CurlLogCategory.Core,
                     "HttpResponse was garbage-collected without Dispose(); " +
                     "the native easy handle was reclaimed by the finalizer. " +

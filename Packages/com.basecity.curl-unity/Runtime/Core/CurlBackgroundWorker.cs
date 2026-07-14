@@ -163,11 +163,12 @@ namespace CurlUnity.Core
             }
             else
             {
-                _logger.Error(CurlLogCategory.Core,
-                    $"CurlBackgroundWorker.Dispose: worker thread did not exit within {joinTimeout}ms. " +
-                    "This usually indicates a user callback (e.g. HttpRequest.OnDataReceived) is blocking. " +
-                    "Skipping curl_multi_cleanup to avoid use-after-free — the multi handle will be reclaimed by the OS on process exit. " +
-                    "User callbacks must return promptly; long-running work should be dispatched to another thread.");
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        $"CurlBackgroundWorker.Dispose: worker thread did not exit within {joinTimeout}ms. " +
+                        "This usually indicates a user callback (e.g. HttpRequest.OnDataReceived) is blocking. " +
+                        "Skipping curl_multi_cleanup to avoid use-after-free — the multi handle will be reclaimed by the OS on process exit. " +
+                        "User callbacks must return promptly; long-running work should be dispatched to another thread.");
             }
         }
 
@@ -202,9 +203,11 @@ namespace CurlUnity.Core
                 catch (Exception ex)
                 {
                     consecutiveFailures++;
-                    _logger.Error(CurlLogCategory.Core,
-                        $"CurlBackgroundWorker: unhandled exception in worker loop " +
-                        $"({consecutiveFailures}/{maxConsecutiveFailures}): {ex}");
+                    if (_logger.IsEnabled(CurlLogLevel.Error))
+                        _logger.Error(CurlLogCategory.Core,
+                            $"CurlBackgroundWorker: unhandled exception in worker loop " +
+                            $"({consecutiveFailures}/{maxConsecutiveFailures}).",
+                            ex);
                     if (consecutiveFailures >= maxConsecutiveFailures && !_stop)
                     {
                         EnterFaultedState(ex);
@@ -223,9 +226,10 @@ namespace CurlUnity.Core
         {
             _faultCause = cause;
             Volatile.Write(ref _faultedFlag, 1);
-            _logger.Error(CurlLogCategory.Core,
-                "CurlBackgroundWorker: entering faulted state — failing all in-flight and pending requests; " +
-                "subsequent sends on this client will fail fast. See the errors above for the root cause.");
+            if (_logger.IsEnabled(CurlLogLevel.Error))
+                _logger.Error(CurlLogCategory.Core,
+                    "CurlBackgroundWorker: entering faulted state — failing all in-flight and pending requests; " +
+                    "subsequent sends on this client will fail fast. See the errors above for the root cause.");
 
             try
             {
@@ -233,8 +237,9 @@ namespace CurlUnity.Core
             }
             catch (Exception ex)
             {
-                _logger.Error(CurlLogCategory.Core,
-                    "CurlBackgroundWorker: FailAllActive threw during fault handling.", ex);
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        "CurlBackgroundWorker: FailAllActive threw during fault handling.", ex);
             }
 
             DrainPendingAsFaulted();
@@ -254,8 +259,9 @@ namespace CurlUnity.Core
             try { request.OnComplete?.Invoke(resp); }
             catch (Exception cbEx)
             {
-                _logger.Warning(CurlLogCategory.Core,
-                    "OnComplete threw during fault-complete.", cbEx);
+                if (request.Logger.IsEnabled(CurlLogLevel.Warning))
+                    request.Logger.Warning(CurlLogCategory.Core,
+                        "OnComplete threw during fault-complete.", cbEx, request.RequestId);
             }
             request.Dispose();
         }

@@ -60,11 +60,8 @@ HTTP/SSE 流程时，在创建 client 时传入配置：
 ```csharp
 using CurlUnity.Diagnostics;
 
-using var client = new CurlHttpClient(new CurlLogOptions
-{
-    Level = CurlLogLevel.Verbose,
-    // Sink = customSink, // 可选；null 使用平台默认输出
-});
+using var client = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Verbose));
 ```
 
 支持 `Off / Error / Warning / Verbose` 四档。自定义输出、线程约束及原生 verbose

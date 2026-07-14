@@ -24,6 +24,7 @@ namespace CurlUnity.Sse
 
         private readonly IHttpClient _client;
         private readonly CurlLogger _logger;
+        private readonly bool _verboseLogging;
         private readonly long _connectionId;
         private readonly Func<CancellationToken, Task<HttpRequest>> _requestFactory;
         private readonly SseConnectionOptions _options;
@@ -56,8 +57,7 @@ namespace CurlUnity.Sse
             SseConnectionOptions options, CancellationToken ct,
             Action<SseEvent> onEvent = null,
             Action<Exception> onError = null,
-            Action<SseConnectionState, SseConnectionState> onStateChanged = null,
-            CurlLogger logger = null)
+            Action<SseConnectionState, SseConnectionState> onStateChanged = null)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _requestFactory = requestFactory ?? throw new ArgumentNullException(nameof(requestFactory));
@@ -65,10 +65,12 @@ namespace CurlUnity.Sse
             _options = options ?? new SseConnectionOptions();
             ValidateOptions(_options); // 非法配置 fail-fast，避免循环里静默关闭/反复报错
 
-            _logger = logger ?? (client as CurlHttpClient)?.Logger ?? CurlLogger.Disabled;
+            _logger = new CurlLogger(client.LogOptions);
+            _verboseLogging = _logger.IsEnabled(CurlLogLevel.Verbose);
             _connectionId = Interlocked.Increment(ref s_nextConnectionId);
-            _logger.Verbose(CurlLogCategory.Sse,
-                $"connection={_connectionId} state=Connecting");
+            if (_verboseLogging)
+                _logger.Verbose(CurlLogCategory.Sse,
+                    $"connection={_connectionId} state=Connecting");
 
             // 解析器防护上限（setter 自带正数校验，非法值在此 fail-fast）
             _parser.MaxLineBytes = _options.MaxLineBytes;
@@ -291,12 +293,15 @@ namespace CurlUnity.Sse
 
                     var wait = ComputeWait(delay); // retry: 优先 + 上限 clamp + jitter
                     reconnects++;
-                    var reconnectReason = lastError == null
-                        ? "eof"
-                        : lastError.GetType().Name;
-                    _logger.Verbose(CurlLogCategory.Sse,
-                        $"connection={_connectionId} reconnect attempt={reconnects} " +
-                        $"waitMs={wait.TotalMilliseconds:0.###} reason={reconnectReason}");
+                    if (_verboseLogging)
+                    {
+                        var reconnectReason = lastError == null
+                            ? "eof"
+                            : lastError.GetType().Name;
+                        _logger.Verbose(CurlLogCategory.Sse,
+                            $"connection={_connectionId} reconnect attempt={reconnects} " +
+                            $"waitMs={wait.TotalMilliseconds:0.###} reason={reconnectReason}");
+                    }
                     try { await _delay(wait, _linkedCt.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException)
                     {
@@ -325,10 +330,13 @@ namespace CurlUnity.Sse
                 else if (terminalReason == null)
                     terminalReason = _linkedCt.IsCancellationRequested ? "cancelled" : "completed";
 
-                var terminalException = cb ?? terminalError ?? (exhausted ? lastError : null);
-                _logger.Verbose(CurlLogCategory.Sse,
-                    $"connection={_connectionId} terminal reason={terminalReason}",
-                    terminalException);
+                if (_verboseLogging)
+                {
+                    var terminalException = cb ?? terminalError ?? (exhausted ? lastError : null);
+                    _logger.Verbose(CurlLogCategory.Sse,
+                        $"connection={_connectionId} terminal reason={terminalReason}",
+                        terminalException);
+                }
                 lock (_ctsGate)
                 {
                     _linkedCt.Dispose();
@@ -369,8 +377,9 @@ namespace CurlUnity.Sse
                 if (prev == (int)next) return;
                 if (Interlocked.CompareExchange(ref _state, (int)next, prev) == prev)
                 {
-                    _logger.Verbose(CurlLogCategory.Sse,
-                        $"connection={_connectionId} state={(SseConnectionState)prev}->{next}");
+                    if (_verboseLogging)
+                        _logger.Verbose(CurlLogCategory.Sse,
+                            $"connection={_connectionId} state={(SseConnectionState)prev}->{next}");
                     var h = OnStateChanged;
                     if (h != null)
                     {

@@ -10,10 +10,6 @@ namespace CurlUnity.Core
     internal sealed class CurlLogger
     {
         internal static readonly CurlLogger Default = new CurlLogger(null);
-        internal static readonly CurlLogger Disabled = new CurlLogger(new CurlLogOptions
-        {
-            Level = CurlLogLevel.Off,
-        });
 
         private readonly CurlLogLevel _level;
         private readonly ICurlLogSink _sink;
@@ -65,12 +61,8 @@ namespace CurlUnity.Core
 
         public void Write(CurlLogEntry entry)
         {
-            var request = entry.RequestId.HasValue ? $"[{entry.RequestId.Value}]" : string.Empty;
-            var message = $"[curl-unity][{entry.Category}]{request} {entry.Message}";
-            if (entry.Exception != null)
-                message += Environment.NewLine + entry.Exception;
-
 #if UNITY_5_3_OR_NEWER
+            var message = FormatEntryBody(entry);
             switch (entry.Level)
             {
                 case CurlLogLevel.Error:
@@ -84,8 +76,20 @@ namespace CurlUnity.Core
                     break;
             }
 #else
-            Console.Error.WriteLine($"[{entry.Level}] {message}");
+            Console.Error.WriteLine(FormatMessage(entry));
 #endif
+        }
+
+        internal static string FormatMessage(CurlLogEntry entry)
+            => $"[{entry.TimestampUtc:O}][{entry.Level}] {FormatEntryBody(entry)}";
+
+        private static string FormatEntryBody(CurlLogEntry entry)
+        {
+            var request = entry.RequestId.HasValue ? $"[{entry.RequestId.Value}]" : string.Empty;
+            var message = $"[curl-unity][{entry.Category}]{request} {entry.Message}";
+            if (entry.Exception != null)
+                message += Environment.NewLine + entry.Exception;
+            return message;
         }
     }
 }

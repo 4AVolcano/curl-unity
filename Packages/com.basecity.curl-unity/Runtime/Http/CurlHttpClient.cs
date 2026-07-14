@@ -44,10 +44,11 @@ namespace CurlUnity.Http
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
 
-        internal CurlLogger Logger => _logger;
-
         /// <summary>全局 HTTP 版本偏好。对所有后续请求生效。默认 PreferH3。</summary>
         public HttpVersion PreferredVersion { get; set; } = HttpVersion.PreferH3;
+
+        /// <summary>该 client 构造时确定的不可变日志配置。</summary>
+        public CurlLogOptions LogOptions { get; }
 
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
@@ -114,7 +115,8 @@ namespace CurlUnity.Http
             CurlLogOptions logOptions = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
-            _logger = new CurlLogger(logOptions);
+            LogOptions = logOptions ?? new CurlLogOptions();
+            _logger = new CurlLogger(LogOptions);
             // 参数校验放在 CurlGlobal.Acquire 之前：校验抛出时全局引用计数不受影响。
             if (maxTotalConnections < 0)
                 throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
@@ -366,9 +368,10 @@ namespace CurlUnity.Http
             }
             else
             {
-                _logger.Error(CurlLogCategory.Core,
-                    "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
-                    "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
+                        "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
             }
         }
 
@@ -437,8 +440,9 @@ namespace CurlUnity.Http
             {
                 var rcVerbose = _api.SetOptLong(h, CurlNative.CURLOPT_VERBOSE, 1);
                 if (rcVerbose != CurlNative.CURLE_OK)
-                    _logger.Warning(CurlLogCategory.Core,
-                        $"CURLOPT_VERBOSE returned {rcVerbose}: {_api.GetErrorString(rcVerbose)}");
+                    _logger.Warning(CurlLogCategory.Http,
+                        $"CURLOPT_VERBOSE returned {rcVerbose}: {_api.GetErrorString(rcVerbose)}",
+                        requestId: curlReq.RequestId);
             }
 
             // HTTP version（枚举值与 curl 定义一致，直接 cast）

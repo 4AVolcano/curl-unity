@@ -222,8 +222,8 @@ var req = new HttpRequest
 
 ## 日志
 
-日志配置跟随 `CurlHttpClient` 实例，并在构造时完成快照；修改原来的
-`CurlLogOptions` 不会改变已经创建的 client。默认级别是 `Warning`，默认 sink 在
+日志配置跟随 `IHttpClient` 实例，`CurlLogOptions` 在构造时确定且不可变。
+默认级别是 `Warning`，默认 sink 在
 Unity 中分别调用 `Debug.LogError` / `Debug.LogWarning` / `Debug.Log`，在非 Unity
 环境写入 `Console.Error`。
 
@@ -231,16 +231,12 @@ Unity 中分别调用 `Debug.LogError` / `Debug.LogWarning` / `Debug.Log`，在�
 using CurlUnity.Diagnostics;
 
 // 完全关闭该 client 的日志
-using var quietClient = new CurlHttpClient(new CurlLogOptions
-{
-    Level = CurlLogLevel.Off,
-});
+using var quietClient = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Off));
 
 // 输出详细的 HTTP 请求生命周期和 SSE 状态/重连信息
-using var debugClient = new CurlHttpClient(new CurlLogOptions
-{
-    Level = CurlLogLevel.Verbose,
-});
+using var debugClient = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Verbose));
 ```
 
 可用档位：
@@ -269,11 +265,8 @@ public sealed class QueueLogSink : ICurlLogSink
 
 ```csharp
 var sink = new QueueLogSink();
-using var client = new CurlHttpClient(new CurlLogOptions
-{
-    Level = CurlLogLevel.Verbose,
-    Sink = sink,
-});
+using var client = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Verbose, sink));
 ```
 
 `Write` 会同步执行，并可能来自调用线程、worker 线程或 finalizer 线程；实现必须线程

@@ -131,11 +131,8 @@ namespace CurlUnity.UnitTests.Tests
         private static CurlHttpClient CreateClient(FakeCurlApi api, CurlLogLevel level,
             ICurlLogSink sink)
         {
-            return new CurlHttpClient(api, logOptions: new CurlLogOptions
-            {
-                Level = level,
-                Sink = sink,
-            });
+            return new CurlHttpClient(api,
+                logOptions: new CurlLogOptions(level, sink));
         }
 
         private static FakeCurlApi CreateCompletingApi(int curlCode, long statusCode)

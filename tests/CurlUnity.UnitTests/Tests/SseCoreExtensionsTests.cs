@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.Sse;
 using Xunit;
@@ -20,6 +21,8 @@ namespace CurlUnity.UnitTests.Tests
         /// <summary>捕获 SendAsync 收到的 request，可选地在发送时回灌数据。</summary>
         private sealed class CapturingHttpClient : IHttpClient
         {
+            public CurlLogOptions LogOptions { get; } =
+                new CurlLogOptions(CurlLogLevel.Off);
             public HttpRequest Captured;
             public Func<HttpRequest, IHttpResponse> Responder;
             public Action<HttpRequest> OnSend;

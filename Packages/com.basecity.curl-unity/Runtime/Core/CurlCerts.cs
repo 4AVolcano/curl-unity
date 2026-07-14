@@ -58,10 +58,11 @@ namespace CurlUnity.Core
         /// </summary>
         public static void ApplyTo(IntPtr handle)
         {
-            ApplyTo(handle, CurlNativeApi.Instance, CurlLogger.Default);
+            ApplyTo(handle, CurlNativeApi.Instance, CurlLogger.Default, requestId: null);
         }
 
-        internal static void ApplyTo(IntPtr handle, ICurlApi api, CurlLogger logger)
+        internal static void ApplyTo(IntPtr handle, ICurlApi api, CurlLogger logger,
+            long? requestId)
         {
             if (handle == IntPtr.Zero) return;
             logger ??= CurlLogger.Default;
@@ -72,18 +73,20 @@ namespace CurlUnity.Core
             if (!string.IsNullOrEmpty(_caCertPath))
             {
                 var rc = api.SetOptString(handle, CurlNative.CURLOPT_CAINFO, _caCertPath);
-                if (rc != CurlNative.CURLE_OK)
+                if (rc != CurlNative.CURLE_OK && logger.IsEnabled(CurlLogLevel.Warning))
                     logger.Warning(CurlLogCategory.Certificates,
-                        $"CurlCerts.ApplyTo: CURLOPT_CAINFO returned {rc}; CA store may not be applied as expected.");
+                        $"CurlCerts.ApplyTo: CURLOPT_CAINFO returned {rc}; CA store may not be applied as expected.",
+                        requestId: requestId);
             }
 
 #if UNITY_STANDALONE_WIN || UNITY_WSA
             // Windows: use native certificate store via CryptoAPI (curl 7.71.0+)
             var rcSsl = api.SetOptLong(handle, CurlNative.CURLOPT_SSL_OPTIONS,
                 CurlNative.CURLSSLOPT_NATIVE_CA);
-            if (rcSsl != CurlNative.CURLE_OK)
+            if (rcSsl != CurlNative.CURLE_OK && logger.IsEnabled(CurlLogLevel.Warning))
                 logger.Warning(CurlLogCategory.Certificates,
-                    $"CurlCerts.ApplyTo: CURLOPT_SSL_OPTIONS (NATIVE_CA) returned {rcSsl}; system cert store may not be in use.");
+                    $"CurlCerts.ApplyTo: CURLOPT_SSL_OPTIONS (NATIVE_CA) returned {rcSsl}; system cert store may not be in use.",
+                    requestId: requestId);
 #endif
         }
 
@@ -97,8 +100,9 @@ namespace CurlUnity.Core
             if (IsCacheValid(versionPath))
             {
                 _caCertPath = pemPath;
-                logger.Verbose(CurlLogCategory.Certificates,
-                    $"Using cached system certificates: {pemPath}");
+                if (logger.IsEnabled(CurlLogLevel.Verbose))
+                    logger.Verbose(CurlLogCategory.Certificates,
+                        $"Using cached system certificates: {pemPath}");
                 return true;
             }
 
@@ -108,14 +112,16 @@ namespace CurlUnity.Core
                 File.WriteAllText(pemPath, pem, Encoding.ASCII);
                 File.WriteAllText(versionPath, GetVersionFingerprint());
                 _caCertPath = pemPath;
-                logger.Verbose(CurlLogCategory.Certificates,
-                    $"Extracted system certificates to {pemPath}");
+                if (logger.IsEnabled(CurlLogLevel.Verbose))
+                    logger.Verbose(CurlLogCategory.Certificates,
+                        $"Extracted system certificates to {pemPath}");
                 return true;
             }
             catch (Exception e)
             {
-                logger.Error(CurlLogCategory.Certificates,
-                    "Failed to extract system certificates; the next client construction will retry.", e);
+                if (logger.IsEnabled(CurlLogLevel.Error))
+                    logger.Error(CurlLogCategory.Certificates,
+                        "Failed to extract system certificates; the next client construction will retry.", e);
                 return false;
             }
         }
@@ -182,8 +188,9 @@ namespace CurlUnity.Core
                 }
                 catch (Exception e)
                 {
-                    logger.Warning(CurlLogCategory.Certificates,
-                        "Skipped one system certificate during extraction.", e);
+                    if (logger.IsEnabled(CurlLogLevel.Warning))
+                        logger.Warning(CurlLogCategory.Certificates,
+                            "Skipped one system certificate during extraction.", e);
                 }
                 finally
                 {
@@ -191,8 +198,9 @@ namespace CurlUnity.Core
                 }
             }
 
-            logger.Verbose(CurlLogCategory.Certificates,
-                $"Extracted {count} system CA certificates.");
+            if (logger.IsEnabled(CurlLogLevel.Verbose))
+                logger.Verbose(CurlLogCategory.Certificates,
+                    $"Extracted {count} system CA certificates.");
             return sb.ToString();
         }
 #endif

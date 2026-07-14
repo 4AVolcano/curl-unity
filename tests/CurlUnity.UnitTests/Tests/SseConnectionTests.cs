@@ -6,7 +6,6 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using CurlUnity.Core;
 using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.Sse;
@@ -49,8 +48,14 @@ namespace CurlUnity.UnitTests.Tests
             public Task BodyGate = Task.CompletedTask; // 可单独拦 body，验证仅收到 headers 时的状态
             public int CallCount => Volatile.Read(ref _calls);
             public int HeadersReceivedCount => Volatile.Read(ref _headersReceived);
+            public CurlLogOptions LogOptions { get; }
 
-            public ControllableHttpClient(Func<int, Behavior> plan) => _plan = plan;
+            public ControllableHttpClient(Func<int, Behavior> plan,
+                CurlLogOptions logOptions = null)
+            {
+                _plan = plan;
+                LogOptions = logOptions ?? new CurlLogOptions(CurlLogLevel.Off);
+            }
 
             public async Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct)
             {
@@ -279,17 +284,12 @@ namespace CurlUnity.UnitTests.Tests
         public async Task Verbose_LogsStateReconnectAndTerminalReason()
         {
             var sink = new CollectingSink();
-            var logger = new CurlLogger(new CurlLogOptions
-            {
-                Level = CurlLogLevel.Verbose,
-                Sink = sink,
-            });
+            var logOptions = new CurlLogOptions(CurlLogLevel.Verbose, sink);
             var client = new ControllableHttpClient(idx => idx == 0
                 ? Behavior.Throw(new IOException("boom"))
-                : Behavior.Block());
+                : Behavior.Block(), logOptions);
             using var conn = new SseConnection(
-                client, Factory(), ZeroDelay(), CancellationToken.None,
-                logger: logger);
+                client, Factory(), ZeroDelay(), CancellationToken.None);
 
             await WaitUntil(() => client.HeadersReceivedCount >= 2);
             conn.Dispose();
@@ -312,15 +312,11 @@ namespace CurlUnity.UnitTests.Tests
         public async Task Warning_DoesNotLogSseFlow()
         {
             var sink = new CollectingSink();
-            var logger = new CurlLogger(new CurlLogOptions
-            {
-                Level = CurlLogLevel.Warning,
-                Sink = sink,
-            });
-            var client = new ControllableHttpClient(_ => Behavior.Eof(204));
+            var logOptions = new CurlLogOptions(CurlLogLevel.Warning, sink);
+            var client = new ControllableHttpClient(
+                _ => Behavior.Eof(204), logOptions);
             using var conn = new SseConnection(
-                client, Factory(), ZeroDelay(), CancellationToken.None,
-                logger: logger);
+                client, Factory(), ZeroDelay(), CancellationToken.None);
 
             await conn.Completion;
 
