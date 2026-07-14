@@ -201,7 +201,7 @@ namespace CurlUnity.Http
                 curlReq.HeadersReceivedCallback = (statusCode, rawHeaders) =>
                 {
                     earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode,
-                        rawHeaders, _logger);
+                        rawHeaders, _logger, requestId);
                     userHeadersCb(earlyResponse);
                 };
                 curlReq.OnHandleFreed = () => earlyResponse?.InvalidateHandle();
@@ -304,7 +304,7 @@ namespace CurlUnity.Http
                     }
                     else
                     {
-                        response = new HttpResponse(_api, curlResp, _logger);
+                        response = new HttpResponse(_api, curlResp, _logger, requestId);
                     }
                     Diagnostics?.Record(response);
                     if (tcs.TrySetResult(response))

@@ -12,6 +12,7 @@ namespace CurlUnity.Http
     {
         private readonly ICurlApi _api;
         private readonly CurlLogger _logger;
+        private readonly long? _requestId;
         // 串行化 getinfo 与 Dispose/finalizer：惰性属性可能在任意线程被读，
         // 不加锁的话「检查非零 → 并发 cleanup → native 拿到已释放 handle」
         // 就是 use-after-free。getinfo 是纯内存读，锁开销可忽略。
@@ -25,14 +26,16 @@ namespace CurlUnity.Http
         private IReadOnlyDictionary<string, string[]> _parsedHeaders;
 
         internal HttpResponse(CurlResponse raw)
-            : this(CurlNativeApi.Instance, raw, null)
+            : this(CurlNativeApi.Instance, raw, null, requestId: null)
         {
         }
 
-        internal HttpResponse(ICurlApi api, CurlResponse raw, CurlLogger logger = null)
+        internal HttpResponse(ICurlApi api, CurlResponse raw, CurlLogger logger = null,
+            long? requestId = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
             _logger = logger ?? CurlLogger.Default;
+            _requestId = requestId;
             _easyHandle = raw.EasyHandle;
             _statusCode = raw.StatusCode;
             _body = raw.Body;
@@ -52,10 +55,11 @@ namespace CurlUnity.Http
         /// 请求侧释放，通过 <see cref="InvalidateHandle"/> 置零避免 UAF。
         /// </summary>
         internal HttpResponse(ICurlApi api, IntPtr easyHandle, long statusCode,
-            byte[] rawHeaders, CurlLogger logger = null)
+            byte[] rawHeaders, CurlLogger logger = null, long? requestId = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
             _logger = logger ?? CurlLogger.Default;
+            _requestId = requestId;
             _easyHandle = easyHandle;
             _statusCode = statusCode;
             _rawHeaders = rawHeaders;
@@ -210,7 +214,8 @@ namespace CurlUnity.Http
                 _logger.Warning(CurlLogCategory.Core,
                     "HttpResponse was garbage-collected without Dispose(); " +
                     "the native easy handle was reclaimed by the finalizer. " +
-                    "Dispose responses explicitly (e.g. with `using`) to avoid native memory pressure.");
+                    "Dispose responses explicitly (e.g. with `using`) to avoid native memory pressure.",
+                    requestId: _requestId);
 
             _api.EasyCleanup(handle);
             CurlGlobal.Release(_api);
