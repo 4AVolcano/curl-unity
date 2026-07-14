@@ -32,6 +32,7 @@ namespace CurlUnity.Core
     {
         internal readonly ICurlApi Api;
         internal readonly CurlLogger Logger;
+        internal readonly long? RequestId;
         internal readonly IntPtr Handle;
         internal Action<CurlResponse> OnComplete;
 
@@ -79,10 +80,11 @@ namespace CurlUnity.Core
         {
         }
 
-        internal CurlRequest(ICurlApi api, CurlLogger logger = null)
+        internal CurlRequest(ICurlApi api, CurlLogger logger = null, long? requestId = null)
         {
             Api = api ?? throw new ArgumentNullException(nameof(api));
             Logger = logger ?? CurlLogger.Default;
+            RequestId = requestId;
             Handle = api.EasyInit();
             if (Handle == IntPtr.Zero)
                 throw new InvalidOperationException("curl_easy_init returned null");
