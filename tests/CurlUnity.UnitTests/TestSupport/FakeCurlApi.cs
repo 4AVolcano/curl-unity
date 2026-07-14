@@ -13,6 +13,8 @@ namespace CurlUnity.UnitTests.TestSupport
         private long _nextMultiHandle = 10_000;
         private long _nextSListHandle = 20_000;
 
+        public IntPtr LastEasyHandle { get; private set; }
+
         public int CurlGlobalInitResult { get; set; } = CurlNative.CURLE_OK;
         public int MultiAddHandleResult { get; set; } = CurlNative.CURLE_OK;
         public int MultiRemoveHandleResult { get; set; } = CurlNative.CURLE_OK;
@@ -23,6 +25,7 @@ namespace CurlUnity.UnitTests.TestSupport
         /// 解析失败等场景。
         /// </summary>
         public Func<IntPtr, int, (int rc, IntPtr value)?> GetInfoStringHook { get; set; }
+        public Func<IntPtr, int, long, int?> SetOptLongHook { get; set; }
 
         public int CurlGlobalInitCalls { get; private set; }
         public int CurlGlobalCleanupCalls { get; private set; }
@@ -70,6 +73,7 @@ namespace CurlUnity.UnitTests.TestSupport
         {
             var handle = new IntPtr(_nextEasyHandle++);
             _easyHandles[handle] = new FakeEasyHandleState();
+            LastEasyHandle = handle;
             return handle;
         }
 
@@ -104,6 +108,10 @@ namespace CurlUnity.UnitTests.TestSupport
 
         public int SetOptLong(IntPtr handle, int option, long value)
         {
+            var injected = SetOptLongHook?.Invoke(handle, option, value);
+            if (injected.HasValue)
+                return injected.Value;
+
             _easyHandles[handle].LongOptions[option] = value;
             return CurlNative.CURLE_OK;
         }

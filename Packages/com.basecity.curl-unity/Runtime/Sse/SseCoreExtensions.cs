@@ -79,7 +79,7 @@ namespace CurlUnity.Sse
         internal static Task<IHttpResponse> RunOneConnectionAsync(
             IHttpClient client, HttpRequest request, SseEventParser parser,
             Action<SseEvent> onEvent, Action onByteReceived, Action onAcceptedHeaders, CancellationToken ct,
-            string lastEventId = null)
+            string lastEventId = null, Action<string> onComment = null)
         {
             var configurationError = GetRequestConfigurationError(request);
             if (configurationError != null) throw configurationError;
@@ -95,7 +95,7 @@ namespace CurlUnity.Sse
             sseRequest.OnDataReceived = (buf, offset, len) =>
             {
                 onByteReceived?.Invoke();
-                parser.Feed(buf, offset, len, onEvent);
+                parser.Feed(buf, offset, len, onEvent, onComment);
             };
             return client.SendAsync(sseRequest, ct);
         }

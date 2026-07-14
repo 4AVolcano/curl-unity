@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using CurlUnity.Core;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.Native;
 using CurlUnity.UnitTests.TestSupport;
@@ -21,9 +23,41 @@ namespace CurlUnity.UnitTests.Tests
     /// </summary>
     public class CurlMultiTests
     {
+        [Fact]
+        public void Cancel_RemoveFailure_UsesInjectedLogger()
+        {
+            var api = new FakeCurlApi();
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions(CurlLogLevel.Error, sink));
+            using var multi = new CurlMulti(api, logger: logger);
+            var req = new CurlRequest(api, logger, requestId: 42)
+            {
+                OnComplete = _ => { },
+            };
+            multi.Send(req);
+            api.MultiRemoveHandleResult = CurlNative.CURLE_OK + 1;
+
+            multi.Cancel(req);
+
+            var entry = Assert.Single(sink.Entries);
+            Assert.Equal(CurlLogLevel.Error, entry.Level);
+            Assert.Equal(CurlLogCategory.Core, entry.Category);
+            Assert.Equal(42, entry.RequestId);
+            Assert.Contains("curl_multi_remove_handle on cancel", entry.Message);
+
+            api.MultiRemoveHandleResult = CurlNative.CURLE_OK;
+        }
+
         // ================================================================
         // Cancel() 的 leak-over-crash 分支
         // ================================================================
+
+        private sealed class CollectingSink : ICurlLogSink
+        {
+            public List<CurlLogEntry> Entries { get; } = new List<CurlLogEntry>();
+
+            public void Write(CurlLogEntry entry) => Entries.Add(entry);
+        }
 
         [Fact]
         public void Cancel_WhenSubmitted_NormalPath_DisposesHandleAfterRemove()
@@ -334,8 +368,14 @@ namespace CurlUnity.UnitTests.Tests
         public void OnHeaderData_WhenBufferWriteFails_DisablesCaptureAndContinuesTransfer()
         {
             var api = new FakeCurlApi();
-            using var multi = new CurlMulti(api);
-            using var req = new CurlRequest(api) { CaptureHeaders = true, OnComplete = _ => { } };
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions(CurlLogLevel.Warning, sink));
+            using var multi = new CurlMulti(api, logger: logger);
+            using var req = new CurlRequest(api, logger, requestId: 43)
+            {
+                CaptureHeaders = true,
+                OnComplete = _ => { },
+            };
             multi.Send(req);
 
             // 模拟 HeaderBuffer 写入失败(ObjectDisposedException): 传输必须继续,
@@ -347,6 +387,7 @@ namespace CurlUnity.UnitTests.Tests
 
             Assert.Equal((UIntPtr)line.Length, returned);
             Assert.Null(req.HeaderBuffer);  // capture 已禁用 → response.Headers 将为 null
+            Assert.Equal(43, Assert.Single(sink.Entries).RequestId);
 
             // 后续 header 块同样只消费不中断
             var next = api.InvokeHeaderCallback(req.Handle, line);

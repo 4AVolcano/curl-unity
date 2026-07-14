@@ -220,6 +220,66 @@ var req = new HttpRequest
 
 请求级 header 优先于 client 级 UA(libcurl 的 slist 优先于 `CURLOPT_USERAGENT`)。
 
+## 日志
+
+日志配置跟随 `IHttpClient` 实例，`CurlLogOptions` 在构造时确定且不可变。
+默认级别是 `Warning`，默认 sink 在
+Unity 中分别调用 `Debug.LogError` / `Debug.LogWarning` / `Debug.Log`，在非 Unity
+环境写入 `Console.Error`。
+
+```csharp
+using CurlUnity.Diagnostics;
+
+// 完全关闭该 client 的日志
+using var quietClient = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Off));
+
+// 输出详细的 HTTP 请求生命周期和 SSE 状态/重连信息
+using var debugClient = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Verbose));
+```
+
+可用档位：
+
+- `Off`：关闭所有托管日志
+- `Error`：内部不变量或资源安全错误
+- `Warning`：可恢复的降级和需要处理的使用问题（默认）
+- `Verbose`：HTTP 请求结果、SSE 状态及重连等调试流程
+
+自定义输出途径只需实现一个同步接口：
+
+```csharp
+using System.Collections.Concurrent;
+using CurlUnity.Diagnostics;
+
+public sealed class QueueLogSink : ICurlLogSink
+{
+    public readonly ConcurrentQueue<CurlLogEntry> Entries = new();
+
+    public void Write(CurlLogEntry entry)
+    {
+        Entries.Enqueue(entry);
+    }
+}
+```
+
+```csharp
+var sink = new QueueLogSink();
+using var client = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Verbose, sink));
+```
+
+`Write` 会同步执行，并可能来自调用线程、worker 线程或 finalizer 线程；实现必须线程
+安全、快速返回，耗时 I/O 应先入队再异步处理。sink 由调用方持有，client 销毁时不会
+代为 `Dispose`。sink 抛出的异常会被日志模块吞掉，不影响网络请求或资源清理。
+
+为避免泄露凭据，HTTP 流程日志不记录 header/body，URL 中的 user info 会被移除，
+query 只显示 `?<redacted>`。`CurlLogEntry.RequestId` 可关联同一 HTTP 请求的开始与终止
+记录。
+
+`Verbose` 同时为新请求开启 libcurl 的 `CURLOPT_VERBOSE`。当前版本尚未接管 libcurl
+原生 verbose 文本：它仍直接写到 stderr，不会进入自定义 `ICurlLogSink`。
+
 ## 线程模型要点
 
 - `SendAsync` 是真正异步,I/O 在专属 worker 线程驱动,不会卡 Unity 主线程

@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using CurlUnity.Core;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.Native;
 using CurlUnity.UnitTests.TestSupport;
@@ -36,10 +38,12 @@ namespace CurlUnity.UnitTests.Tests
         // finalizer 语义本身不依赖完整 async 请求链路；async state machine 和
         // coverlet 插桩会延长局部变量生命周期，使 GC 时序断言在 CI 下不稳定。
         [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
-        private static WeakReference CreateLeakedResponse(FakeCurlApi api, out IntPtr handle)
+        private static WeakReference CreateLeakedResponse(FakeCurlApi api, out IntPtr handle,
+            CurlLogger logger = null, long? requestId = null)
         {
             handle = api.EasyInit();
-            var resp = new HttpResponse(api, new CurlResponse { EasyHandle = handle });
+            var resp = new HttpResponse(api, new CurlResponse { EasyHandle = handle },
+                logger, requestId);
             Assert.NotNull(resp);
             return new WeakReference(resp); // 故意不 Dispose
         }
@@ -73,6 +77,24 @@ namespace CurlUnity.UnitTests.Tests
 
             Assert.True(cleaned,
                 "未 Dispose 的 HttpResponse 应由 finalizer 兜底回收 easy handle");
+        }
+
+        [Fact]
+        public void FinalizerWarning_IncludesRequestId()
+        {
+            var api = new FakeCurlApi();
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions(CurlLogLevel.Warning, sink));
+            var weak = CreateLeakedResponse(api, out var captured, logger, requestId: 42);
+
+            var cleaned = WaitUntilCleanedUp(api, captured);
+            if (!cleaned && weak.Target is IDisposable leaked)
+                leaked.Dispose();
+
+            Assert.True(cleaned);
+            Assert.True(sink.Entries.TryDequeue(out var warning));
+            Assert.Equal(CurlLogLevel.Warning, warning.Level);
+            Assert.Equal(42, warning.RequestId);
         }
 
         [Fact]
@@ -142,6 +164,14 @@ namespace CurlUnity.UnitTests.Tests
                 resp?.Dispose();
                 client.Dispose();
             }
+        }
+
+        private sealed class CollectingSink : ICurlLogSink
+        {
+            public ConcurrentQueue<CurlLogEntry> Entries { get; } =
+                new ConcurrentQueue<CurlLogEntry>();
+
+            public void Write(CurlLogEntry entry) => Entries.Enqueue(entry);
         }
     }
 }

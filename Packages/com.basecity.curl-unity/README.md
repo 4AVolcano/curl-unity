@@ -50,7 +50,22 @@ public class Example : MonoBehaviour
 
 - **在线文档站**: <https://4avolcano.github.io/curl-unity/>
 - [快速开始](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/getting-started.md)
-- [进阶使用](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/advanced.md) — 流式上传下载、SSE、Multipart、代理、Cookie、诊断
+- [进阶使用](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/advanced.md) — 流式上传下载、SSE、Multipart、代理、Cookie、日志、诊断
+
+## 日志
+
+日志配置跟随 `CurlHttpClient` 实例，默认输出 `Warning` 及以上级别。需要详细排查
+HTTP/SSE 流程时，在创建 client 时传入配置：
+
+```csharp
+using CurlUnity.Diagnostics;
+
+using var client = new CurlHttpClient(
+    new CurlLogOptions(CurlLogLevel.Verbose));
+```
+
+支持 `Off / Error / Warning / Verbose` 四档。自定义输出、线程约束及原生 verbose
+限制见[进阶使用：日志](https://github.com/4AVolcano/curl-unity/blob/master/docs/articles/advanced.md#日志)。
 
 ## 源码 / Issues
 

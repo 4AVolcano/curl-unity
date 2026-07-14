@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using CurlUnity.Diagnostics;
 
 namespace CurlUnity.Http
 {
@@ -14,6 +15,9 @@ namespace CurlUnity.Http
     /// </remarks>
     public interface IHttpClient : IDisposable
     {
+        /// <summary>该 client 的不可变日志配置，SSE 等上层功能也使用此配置。</summary>
+        CurlLogOptions LogOptions { get; }
+
         /// <summary>
         /// 异步发送一个 HTTP 请求。Task 完成后的结果所有权归调用方,用完需 <c>Dispose()</c>
         /// 释放底层 easy handle。

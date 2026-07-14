@@ -108,6 +108,13 @@ namespace CurlUnity.Sse
         /// <c>data</c> 超过 <see cref="MaxEventDataChars"/>（通常意味着对端恶意或损坏）。</exception>
         public void Feed(byte[] buffer, int offset, int count, Action<SseEvent> onEvent)
         {
+            Feed(buffer, offset, count, onEvent, onComment: null);
+        }
+
+        /// <summary>与公开 <see cref="Feed"/> 相同，并允许 SSE 连接层观察原始 comment 行。</summary>
+        internal void Feed(byte[] buffer, int offset, int count, Action<SseEvent> onEvent,
+            Action<string> onComment)
+        {
             if (buffer == null) throw new ArgumentNullException(nameof(buffer));
             if (onEvent == null) throw new ArgumentNullException(nameof(onEvent));
             // 用减法形式比较，避免 offset + count 整数溢出
@@ -149,12 +156,12 @@ namespace CurlUnity.Sse
 
                 if (b == (byte)'\r')
                 {
-                    EndLine(onEvent);
+                    EndLine(onEvent, onComment);
                     _sawCr = true;
                 }
                 else if (b == (byte)'\n')
                 {
-                    EndLine(onEvent);
+                    EndLine(onEvent, onComment);
                 }
                 else
                 {
@@ -200,21 +207,26 @@ namespace CurlUnity.Sse
             Array.Resize(ref _lineBuf, newCap);
         }
 
-        private void EndLine(Action<SseEvent> onEvent)
+        private void EndLine(Action<SseEvent> onEvent, Action<string> onComment)
         {
             string line = Encoding.UTF8.GetString(_lineBuf, 0, _lineLen);
             _lineLen = 0;
-            ProcessLine(line, onEvent);
+            ProcessLine(line, onEvent, onComment);
         }
 
-        private void ProcessLine(string line, Action<SseEvent> onEvent)
+        private void ProcessLine(string line, Action<SseEvent> onEvent,
+            Action<string> onComment)
         {
             if (line.Length == 0)
             {
                 Dispatch(onEvent);
                 return;
             }
-            if (line[0] == ':') return; // 注释行，忽略
+            if (line[0] == ':')
+            {
+                onComment?.Invoke(line);
+                return;
+            }
 
             int colon = line.IndexOf(':');
             string field, value;

@@ -4,6 +4,7 @@ using System.Threading;
 #if UNITY_5_3_OR_NEWER
 using AOT;
 #endif
+using CurlUnity.Diagnostics;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
@@ -30,6 +31,7 @@ namespace CurlUnity.Core
         private static readonly CurlNative.ShareUnlockCallback s_unlockCb = UnlockCallback;
 
         private readonly ICurlApi _api;
+        private readonly CurlLogger _logger;
         private readonly object _cookieLock = new();
         private IntPtr _handle;
         private GCHandle _selfHandle;
@@ -37,9 +39,10 @@ namespace CurlUnity.Core
 
         public IntPtr Handle => _handle;
 
-        public CurlCookieJar(ICurlApi api)
+        public CurlCookieJar(ICurlApi api, CurlLogger logger = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            _logger = logger ?? CurlLogger.Default;
 
             _handle = _api.ShareInit();
             if (_handle == IntPtr.Zero)
@@ -93,10 +96,11 @@ namespace CurlUnity.Core
             // (GCHandle) 去 FromIntPtr。如果这里 Free 掉 GCHandle、handle 置零，
             // 下一次回调就会踩一个无效 handle，大概率 crash。
             // 宁可泄漏 share handle + GCHandle，也别引入 use-after-free。
-            CurlLog.Error(
-                $"curl_share_cleanup failed (code {rc}): {_api.GetShareErrorString(rc)}. " +
-                "Leaking the share handle and its GCHandle to avoid UAF from lock/unlock callbacks. " +
-                "This usually indicates an easy handle is still associated with the share — check CurlHttpClient.Dispose ordering.");
+            if (_logger.IsEnabled(CurlLogLevel.Error))
+                _logger.Error(CurlLogCategory.Core,
+                    $"curl_share_cleanup failed (code {rc}): {_api.GetShareErrorString(rc)}. " +
+                    "Leaking the share handle and its GCHandle to avoid UAF from lock/unlock callbacks. " +
+                    "This usually indicates an easy handle is still associated with the share — check CurlHttpClient.Dispose ordering.");
         }
 
         private void Check(string name, int rc)
@@ -112,14 +116,18 @@ namespace CurlUnity.Core
         private static void LockCallback(IntPtr handle, int data, int access, IntPtr userdata)
         {
             // 回调跨 native 边界，异常必须吞掉，否则 libcurl 拿到未定义状态。
+            CurlCookieJar self = null;
             try
             {
-                var self = (CurlCookieJar)GCHandle.FromIntPtr(userdata).Target;
+                self = (CurlCookieJar)GCHandle.FromIntPtr(userdata).Target;
                 Monitor.Enter(self._cookieLock);
             }
             catch (Exception ex)
             {
-                CurlLog.Error($"CurlCookieJar.LockCallback threw: {ex}");
+                var logger = self?._logger ?? CurlLogger.Default;
+                if (logger.IsEnabled(CurlLogLevel.Error))
+                    logger.Error(CurlLogCategory.Core,
+                        "CurlCookieJar.LockCallback threw.", ex);
             }
         }
 
@@ -128,14 +136,18 @@ namespace CurlUnity.Core
 #endif
         private static void UnlockCallback(IntPtr handle, int data, IntPtr userdata)
         {
+            CurlCookieJar self = null;
             try
             {
-                var self = (CurlCookieJar)GCHandle.FromIntPtr(userdata).Target;
+                self = (CurlCookieJar)GCHandle.FromIntPtr(userdata).Target;
                 Monitor.Exit(self._cookieLock);
             }
             catch (Exception ex)
             {
-                CurlLog.Error($"CurlCookieJar.UnlockCallback threw: {ex}");
+                var logger = self?._logger ?? CurlLogger.Default;
+                if (logger.IsEnabled(CurlLogLevel.Error))
+                    logger.Error(CurlLogCategory.Core,
+                        "CurlCookieJar.UnlockCallback threw.", ex);
             }
         }
     }

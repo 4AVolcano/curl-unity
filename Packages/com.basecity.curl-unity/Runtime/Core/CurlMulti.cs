@@ -7,6 +7,7 @@ using System.Threading;
 using AOT;
 #endif
 using CurlUnity.Http;
+using CurlUnity.Diagnostics;
 using CurlUnity.Native;
 
 namespace CurlUnity.Core
@@ -31,6 +32,7 @@ namespace CurlUnity.Core
         private static readonly CurlNative.WriteCallback s_readCb = OnReadData;
 
         private readonly ICurlApi _api;
+        private readonly CurlLogger _logger;
         private IntPtr _multi;
         private int _disposedFlag;
         private readonly HashSet<CurlRequest> _activeRequests = new();
@@ -44,7 +46,7 @@ namespace CurlUnity.Core
         internal const int DefaultMaxHostConnections = 6;
 
         public CurlMulti()
-            : this(CurlNativeApi.Instance)
+            : this(CurlNativeApi.Instance, logger: null)
         {
         }
 
@@ -52,9 +54,11 @@ namespace CurlUnity.Core
         /// <param name="maxHostConnections">CURLMOPT_MAX_HOST_CONNECTIONS；0 = 不限。</param>
         internal CurlMulti(ICurlApi api,
             int maxTotalConnections = DefaultMaxTotalConnections,
-            int maxHostConnections = DefaultMaxHostConnections)
+            int maxHostConnections = DefaultMaxHostConnections,
+            CurlLogger logger = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            _logger = logger ?? CurlLogger.Default;
             if (maxTotalConnections < 0)
                 throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
             if (maxHostConnections < 0)
@@ -70,16 +74,16 @@ namespace CurlUnity.Core
             {
                 var rc = _api.MultiSetOptLong(_multi,
                     CurlNative.CURLMOPT_MAX_TOTAL_CONNECTIONS, maxTotalConnections);
-                if (rc != CurlNative.CURLE_OK)
-                    CurlLog.Warn(
+                if (rc != CurlNative.CURLE_OK && _logger.IsEnabled(CurlLogLevel.Warning))
+                    _logger.Warning(CurlLogCategory.Core,
                         $"CURLMOPT_MAX_TOTAL_CONNECTIONS returned {rc} ({_api.GetMultiErrorString(rc)}); connection count is unbounded.");
             }
             if (maxHostConnections > 0)
             {
                 var rc = _api.MultiSetOptLong(_multi,
                     CurlNative.CURLMOPT_MAX_HOST_CONNECTIONS, maxHostConnections);
-                if (rc != CurlNative.CURLE_OK)
-                    CurlLog.Warn(
+                if (rc != CurlNative.CURLE_OK && _logger.IsEnabled(CurlLogLevel.Warning))
+                    _logger.Warning(CurlLogCategory.Core,
                         $"CURLMOPT_MAX_HOST_CONNECTIONS returned {rc} ({_api.GetMultiErrorString(rc)}); per-host connection count is unbounded.");
             }
         }
@@ -162,7 +166,7 @@ namespace CurlUnity.Core
                     _api.SetOptPtr(request.Handle, CurlNative.CURLOPT_PRIVATE, ptr), request)) return;
 
             // CA 证书 —— 失败不 fatal，但会影响 TLS 验证行为；由 CurlCerts 自己日志化
-            CurlCerts.ApplyTo(request.Handle, _api);
+            CurlCerts.ApplyTo(request.Handle, _api, request.Logger, request.RequestId);
 
             _activeRequests.Add(request);
             var rc = _api.MultiAddHandle(_multi, request.Handle);
@@ -195,8 +199,9 @@ namespace CurlUnity.Core
             if (IsDisposed) return;
 
             var rc = _api.MultiPerform(_multi, out _);
-            if (rc != CurlNative.CURLE_OK)
-                CurlLog.Warn($"curl_multi_perform returned {rc}: {_api.GetMultiErrorString(rc)}");
+            if (rc != CurlNative.CURLE_OK && _logger.IsEnabled(CurlLogLevel.Warning))
+                _logger.Warning(CurlLogCategory.Core,
+                    $"curl_multi_perform returned {rc}: {_api.GetMultiErrorString(rc)}");
 
             while (_api.MultiInfoRead(_multi, out var easyHandle, out var curlCode) == 1)
             {
@@ -208,8 +213,9 @@ namespace CurlUnity.Core
         {
             if (IsDisposed) return;
             var rc = _api.MultiPoll(_multi, IntPtr.Zero, 0, timeoutMs, out _);
-            if (rc != CurlNative.CURLE_OK)
-                CurlLog.Warn($"curl_multi_poll returned {rc}: {_api.GetMultiErrorString(rc)}");
+            if (rc != CurlNative.CURLE_OK && _logger.IsEnabled(CurlLogLevel.Warning))
+                _logger.Warning(CurlLogCategory.Core,
+                    $"curl_multi_poll returned {rc}: {_api.GetMultiErrorString(rc)}");
         }
 
         /// <summary>线程安全，可从任意线程调用。</summary>
@@ -256,10 +262,12 @@ namespace CurlUnity.Core
                     // 采用"泄漏优于崩溃"策略：保留 request 在 _activeRequests 里，等
                     // _multi.Dispose 时再尝试清理；如果那时仍失败，handle 就随进程退出
                     // 由 OS 回收。
-                    CurlLog.Error(
-                        $"curl_multi_remove_handle on cancel returned {rc} ({_api.GetMultiErrorString(rc)}); " +
-                        $"leaving easy handle attached to multi to avoid use-after-free. " +
-                        $"It will be reclaimed when multi is disposed.");
+                    if (request.Logger.IsEnabled(CurlLogLevel.Error))
+                        request.Logger.Error(CurlLogCategory.Core,
+                            $"curl_multi_remove_handle on cancel returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                            $"leaving easy handle attached to multi to avoid use-after-free. " +
+                            $"It will be reclaimed when multi is disposed.",
+                            requestId: request.RequestId);
                     return;
                 }
 
@@ -288,12 +296,19 @@ namespace CurlUnity.Core
                 var rc = _api.MultiRemoveHandle(_multi, request.Handle);
                 if (rc != CurlNative.CURLE_OK)
                 {
-                    CurlLog.Error(
-                        $"FailAllActive: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
-                        "leaving easy handle attached to multi to avoid use-after-free. Completing request as failed.");
+                    if (request.Logger.IsEnabled(CurlLogLevel.Error))
+                        request.Logger.Error(CurlLogCategory.Core,
+                            $"FailAllActive: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                            "leaving easy handle attached to multi to avoid use-after-free. Completing request as failed.",
+                            requestId: request.RequestId);
                     var failResp = new CurlResponse { FailureException = cause };
                     try { request.OnComplete?.Invoke(failResp); }
-                    catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fail-all: {cbEx}"); }
+                    catch (Exception cbEx)
+                    {
+                        if (request.Logger.IsEnabled(CurlLogLevel.Warning))
+                            request.Logger.Warning(CurlLogCategory.Core,
+                                "OnComplete threw during fail-all.", cbEx, request.RequestId);
+                    }
                     request.ReleaseBuffers();
                     continue;
                 }
@@ -320,7 +335,12 @@ namespace CurlUnity.Core
             };
 
             try { request.OnComplete?.Invoke(resp); }
-            catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fail-complete: {cbEx}"); }
+            catch (Exception cbEx)
+            {
+                if (request.Logger.IsEnabled(CurlLogLevel.Warning))
+                    request.Logger.Warning(CurlLogCategory.Core,
+                        "OnComplete threw during fail-complete.", cbEx, request.RequestId);
+            }
 
             request.Dispose();
         }
@@ -343,10 +363,12 @@ namespace CurlUnity.Core
                 }
                 else
                 {
-                    CurlLog.Error(
-                        $"CurlMulti.Dispose: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
-                        $"skipping easy handle cleanup for this request to avoid use-after-free. " +
-                        $"Resource will be reclaimed on process exit.");
+                    if (request.Logger.IsEnabled(CurlLogLevel.Error))
+                        request.Logger.Error(CurlLogCategory.Core,
+                            $"CurlMulti.Dispose: curl_multi_remove_handle returned {rc} ({_api.GetMultiErrorString(rc)}); " +
+                            $"skipping easy handle cleanup for this request to avoid use-after-free. " +
+                            $"Resource will be reclaimed on process exit.",
+                            requestId: request.RequestId);
                 }
             }
             _activeRequests.Clear();
@@ -368,16 +390,18 @@ namespace CurlUnity.Core
             var rcInfo = _api.GetInfoString(easyHandle, CurlNative.CURLINFO_PRIVATE, out var ptr);
             if (rcInfo != CurlNative.CURLE_OK || ptr == IntPtr.Zero)
             {
-                CurlLog.Error(
-                    $"ProcessCompletion: failed to resolve CurlRequest from easy handle " +
-                    $"(CURLINFO_PRIVATE rc={rcInfo}, ptr={ptr}). Removing stray handle from multi.");
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        $"ProcessCompletion: failed to resolve CurlRequest from easy handle " +
+                        $"(CURLINFO_PRIVATE rc={rcInfo}, ptr={ptr}). Removing stray handle from multi.");
                 var removeRc = _api.MultiRemoveHandle(_multi, easyHandle);
                 if (removeRc != CurlNative.CURLE_OK)
                 {
-                    CurlLog.Error(
-                        $"ProcessCompletion: curl_multi_remove_handle returned {removeRc} " +
-                        $"({_api.GetMultiErrorString(removeRc)}) while removing stray handle from multi. " +
-                        $"Handle may remain attached and leak until multi cleanup or process exit.");
+                    if (_logger.IsEnabled(CurlLogLevel.Error))
+                        _logger.Error(CurlLogCategory.Core,
+                            $"ProcessCompletion: curl_multi_remove_handle returned {removeRc} " +
+                            $"({_api.GetMultiErrorString(removeRc)}) while removing stray handle from multi. " +
+                            $"Handle may remain attached and leak until multi cleanup or process exit.");
                 }
                 return;
             }
@@ -390,19 +414,21 @@ namespace CurlUnity.Core
             try { request = (CurlRequest)GCHandle.FromIntPtr(ptr).Target; }
             catch (Exception resolveEx)
             {
-                CurlLog.Error(
-                    $"ProcessCompletion: failed to resolve CurlRequest from CURLINFO_PRIVATE " +
-                    $"(ptr=0x{ptr.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        $"ProcessCompletion: failed to resolve CurlRequest from CURLINFO_PRIVATE " +
+                        $"(ptr=0x{ptr.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
             }
             if (request == null)
             {
                 var strayRc = _api.MultiRemoveHandle(_multi, easyHandle);
                 if (strayRc != CurlNative.CURLE_OK)
                 {
-                    CurlLog.Error(
-                        $"ProcessCompletion: curl_multi_remove_handle returned {strayRc} " +
-                        $"({_api.GetMultiErrorString(strayRc)}) while removing unresolvable handle from multi. " +
-                        $"Handle may remain attached and leak until multi cleanup or process exit.");
+                    if (_logger.IsEnabled(CurlLogLevel.Error))
+                        _logger.Error(CurlLogCategory.Core,
+                            $"ProcessCompletion: curl_multi_remove_handle returned {strayRc} " +
+                            $"({_api.GetMultiErrorString(strayRc)}) while removing unresolvable handle from multi. " +
+                            $"Handle may remain attached and leak until multi cleanup or process exit.");
                 }
                 return;
             }
@@ -415,10 +441,12 @@ namespace CurlUnity.Core
             var rcRemove = _api.MultiRemoveHandle(_multi, easyHandle);
             if (rcRemove != CurlNative.CURLE_OK)
             {
-                CurlLog.Error(
-                    $"ProcessCompletion: curl_multi_remove_handle returned {rcRemove} " +
-                    $"({_api.GetMultiErrorString(rcRemove)}); not transferring easy handle ownership. " +
-                    $"Request will complete with an error and the handle will stay attached to multi.");
+                if (request.Logger.IsEnabled(CurlLogLevel.Error))
+                    request.Logger.Error(CurlLogCategory.Core,
+                        $"ProcessCompletion: curl_multi_remove_handle returned {rcRemove} " +
+                        $"({_api.GetMultiErrorString(rcRemove)}); not transferring easy handle ownership. " +
+                        $"Request will complete with an error and the handle will stay attached to multi.",
+                        requestId: request.RequestId);
 
                 var failResp = new CurlResponse
                 {
@@ -429,7 +457,12 @@ namespace CurlUnity.Core
                 };
 
                 try { request.OnComplete?.Invoke(failResp); }
-                catch (Exception cbEx) { CurlLog.Warn($"OnComplete threw during fail-complete: {cbEx}"); }
+                catch (Exception cbEx)
+                {
+                    if (request.Logger.IsEnabled(CurlLogLevel.Warning))
+                        request.Logger.Warning(CurlLogCategory.Core,
+                            "OnComplete threw during fail-complete.", cbEx, request.RequestId);
+                }
 
                 // 释放我们持有的辅助资源（GCHandle、slist、buffers），_handleTransferred
                 // 标志让后续 Dispose 跳过 EasyCleanup。request 仍留在 _activeRequests。
@@ -472,7 +505,13 @@ namespace CurlUnity.Core
             };
 
             try { request.OnComplete?.Invoke(response); }
-            catch (Exception) { /* TODO: 接入日志系统 */ }
+            catch (Exception callbackException)
+            {
+                if (request.Logger.IsEnabled(CurlLogLevel.Error))
+                    request.Logger.Error(CurlLogCategory.Core,
+                        "OnComplete threw during request completion.", callbackException,
+                        request.RequestId);
+            }
 
             request.ReleaseBuffers();  // 释放辅助资源，不释放 easy handle
         }
@@ -494,15 +533,17 @@ namespace CurlUnity.Core
             try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
             catch (Exception resolveEx)
             {
-                CurlLog.Error(
-                    $"OnWriteData: failed to resolve CurlRequest from userdata " +
-                    $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnWriteData: failed to resolve CurlRequest from userdata " +
+                        $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
                 return UIntPtr.Zero;
             }
             if (request == null)
             {
-                CurlLog.Error(
-                    $"OnWriteData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnWriteData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
                 return UIntPtr.Zero;
             }
 
@@ -571,7 +612,9 @@ namespace CurlUnity.Core
             {
                 // libcurl 单行 header 上限约 100KB，走到这里属于异常输入。此值在 32 位
                 // 平台上无法用 UIntPtr 表达为"已消费"，只能中止（实际不可达）。
-                CurlLog.Error($"OnHeaderData: header block of {length} bytes exceeds int.MaxValue; aborting transfer.");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnHeaderData: header block of {length} bytes exceeds int.MaxValue; aborting transfer.");
                 return UIntPtr.Zero;
             }
             var totalBytes = (int)length;
@@ -581,15 +624,17 @@ namespace CurlUnity.Core
             try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
             catch (Exception resolveEx)
             {
-                CurlLog.Error(
-                    $"OnHeaderData: failed to resolve CurlRequest from userdata " +
-                    $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnHeaderData: failed to resolve CurlRequest from userdata " +
+                        $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
                 return lengthResult;
             }
             if (request == null)
             {
-                CurlLog.Error(
-                    $"OnHeaderData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnHeaderData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
                 return lengthResult;
             }
 
@@ -601,9 +646,11 @@ namespace CurlUnity.Core
             }
             catch (Exception ex)
             {
-                CurlLog.Warn(
-                    $"OnHeaderData: failed to copy a native header line; observation for this line was skipped: " +
-                    $"{ex.GetType().Name}: {ex.Message}");
+                if (request.Logger.IsEnabled(CurlLogLevel.Warning))
+                    request.Logger.Warning(CurlLogCategory.Core,
+                        $"OnHeaderData: failed to copy a native header line; observation for this line was skipped: " +
+                        $"{ex.GetType().Name}: {ex.Message}",
+                        requestId: request.RequestId);
                 DisableHeaderCapture(request);
                 return lengthResult;
             }
@@ -621,9 +668,11 @@ namespace CurlUnity.Core
                 }
                 catch (Exception ex)
                 {
-                    CurlLog.Warn(
-                        $"OnHeaderData: header capture failed and was disabled for this request " +
-                        $"(response.Headers will be null): {ex.GetType().Name}: {ex.Message}");
+                    if (request.Logger.IsEnabled(CurlLogLevel.Warning))
+                        request.Logger.Warning(CurlLogCategory.Core,
+                            $"OnHeaderData: header capture failed and was disabled for this request " +
+                            $"(response.Headers will be null): {ex.GetType().Name}: {ex.Message}",
+                            requestId: request.RequestId);
                     DisableHeaderCapture(request);
                 }
             }
@@ -783,15 +832,17 @@ namespace CurlUnity.Core
             try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
             catch (Exception resolveEx)
             {
-                CurlLog.Error(
-                    $"OnReadData: failed to resolve CurlRequest from userdata " +
-                    $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnReadData: failed to resolve CurlRequest from userdata " +
+                        $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
                 return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
             }
             if (request == null)
             {
-                CurlLog.Error(
-                    $"OnReadData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnReadData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
                 return (UIntPtr)CurlNative.CURL_READFUNC_ABORT;
             }
 

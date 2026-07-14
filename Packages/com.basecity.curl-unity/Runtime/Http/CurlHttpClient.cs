@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,10 +31,13 @@ namespace CurlUnity.Http
     /// </remarks>
     public class CurlHttpClient : IHttpClient
     {
+        private static long s_nextRequestId;
+
         private readonly ICurlApi _api;
+        private readonly CurlLogger _logger;
         private readonly CurlBackgroundWorker _worker;
         private readonly ConcurrentDictionary<IntPtr, CancellationTokenRegistration> _cancellations = new();
-        private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, byte> _pendingTasks = new();
+        private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, RequestLogContext> _pendingTasks = new();
         private CurlCookieJar _cookieJar;  // lazy：首次用到 EnableCookies 时初始化
         private volatile HttpProxy _proxy; // null = 不走代理（默认）；引用赋值天然原子
         private int _disposedFlag;
@@ -43,11 +47,11 @@ namespace CurlUnity.Http
         /// <summary>全局 HTTP 版本偏好。对所有后续请求生效。默认 PreferH3。</summary>
         public HttpVersion PreferredVersion { get; set; } = HttpVersion.PreferH3;
 
+        /// <summary>该 client 构造时确定的不可变日志配置。</summary>
+        public CurlLogOptions LogOptions { get; }
+
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
-
-        /// <summary>开启 libcurl CURLOPT_VERBOSE,内部活动写到 stderr。仅诊断用,默认 false。</summary>
-        public bool Verbose { get; set; } = false;
 
         /// <summary>
         /// 默认 User-Agent。对所有请求生效;请求级 <see cref="HttpRequest.Headers"/>
@@ -69,7 +73,14 @@ namespace CurlUnity.Http
         /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
         public CurlHttpClient(bool enableDiagnostics = false)
             : this(CurlNativeApi.Instance, enableDiagnostics,
-                DefaultMaxTotalConnections, DefaultMaxHostConnections)
+                DefaultMaxTotalConnections, DefaultMaxHostConnections, null)
+        {
+        }
+
+        /// <summary>使用指定的实例级日志配置和默认连接数上限创建 client。</summary>
+        public CurlHttpClient(CurlLogOptions logOptions, bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics,
+                DefaultMaxTotalConnections, DefaultMaxHostConnections, logOptions)
         {
         }
 
@@ -84,25 +95,39 @@ namespace CurlUnity.Http
         public CurlHttpClient(int maxTotalConnections,
             int maxHostConnections = DefaultMaxHostConnections,
             bool enableDiagnostics = false)
-            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections, maxHostConnections)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections,
+                maxHostConnections, null)
+        {
+        }
+
+        /// <summary>使用指定的实例级日志配置和连接数上限创建 client。</summary>
+        public CurlHttpClient(CurlLogOptions logOptions, int maxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections,
+                maxHostConnections, logOptions)
         {
         }
 
         internal CurlHttpClient(ICurlApi api, bool enableDiagnostics = false,
             int maxTotalConnections = DefaultMaxTotalConnections,
-            int maxHostConnections = DefaultMaxHostConnections)
+            int maxHostConnections = DefaultMaxHostConnections,
+            CurlLogOptions logOptions = null)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
+            LogOptions = logOptions ?? new CurlLogOptions();
+            _logger = new CurlLogger(LogOptions);
             // 参数校验放在 CurlGlobal.Acquire 之前：校验抛出时全局引用计数不受影响。
             if (maxTotalConnections < 0)
                 throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
             if (maxHostConnections < 0)
                 throw new ArgumentOutOfRangeException(nameof(maxHostConnections), "必须 >= 0（0 = 不限）");
             CurlGlobal.Acquire(_api);
-            CurlCerts.Initialize();
+            CurlCerts.Initialize(_logger);
             if (enableDiagnostics)
                 Diagnostics = new HttpDiagnostics();
-            _worker = new CurlBackgroundWorker(_api, maxTotalConnections, maxHostConnections);
+            _worker = new CurlBackgroundWorker(_api, maxTotalConnections,
+                maxHostConnections, _logger);
             _worker.Start();
         }
 
@@ -122,6 +147,20 @@ namespace CurlUnity.Http
         {
             if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
 
+            var requestId = Interlocked.Increment(ref s_nextRequestId);
+            var requestStopwatch = _logger.IsEnabled(CurlLogLevel.Verbose)
+                ? Stopwatch.StartNew()
+                : null;
+            if (requestStopwatch != null)
+            {
+                var method = request == null
+                    ? "<unknown>"
+                    : request.Method.ToString().ToUpperInvariant();
+                _logger.Verbose(CurlLogCategory.Http,
+                    $"{method} {FormatUrlForLog(request?.Url)} started",
+                    requestId: requestId);
+            }
+
             // 短路已取消的 token：直接以 Canceled 完成 Task，不分配 CurlRequest，
             // 也不走 ct.Register 的"注册回调可能同步触发"路径——那条路径在 token
             // 已取消时会在字典还没写入的窗口里触发回调，虽然最终会靠 OnComplete
@@ -130,6 +169,7 @@ namespace CurlUnity.Http
             {
                 var canceled = new TaskCompletionSource<IHttpResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
                 canceled.TrySetCanceled(ct);
+                LogRequestCancelled(requestId, requestStopwatch);
                 return canceled.Task;
             }
 
@@ -138,17 +178,18 @@ namespace CurlUnity.Http
             CurlRequest curlReq;
             try
             {
-                curlReq = BuildCurlRequest(request);
+                curlReq = BuildCurlRequest(request, requestId);
             }
             catch (Exception ex)
             {
                 // URL / setopt / slist_append 等前置配置失败，直接让 Task 以异常完成，
                 // 不进入 worker 队列。
                 tcs.TrySetException(ex);
+                LogRequestFailed(requestId, requestStopwatch, ex);
                 return tcs.Task;
             }
 
-            _pendingTasks[tcs] = 0;
+            _pendingTasks[tcs] = new RequestLogContext(requestId, requestStopwatch);
 
             // OnHeadersReceived 闭包编排：earlyResponse 在 worker 线程的
             // HeadersReceivedCallback 中创建，OnComplete 中复用。两者都在同一
@@ -159,7 +200,8 @@ namespace CurlUnity.Http
             {
                 curlReq.HeadersReceivedCallback = (statusCode, rawHeaders) =>
                 {
-                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode, rawHeaders);
+                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode,
+                        rawHeaders, _logger, requestId);
                     userHeadersCb(earlyResponse);
                 };
                 curlReq.OnHandleFreed = () => earlyResponse?.InvalidateHandle();
@@ -172,6 +214,7 @@ namespace CurlUnity.Http
                 {
                     if (tcs.TrySetCanceled(ct))
                     {
+                        LogRequestCancelled(requestId, requestStopwatch);
                         _pendingTasks.TryRemove(tcs, out _);
                         if (_cancellations.TryRemove(curlReq.Handle, out var r))
                             r.Dispose();
@@ -204,7 +247,11 @@ namespace CurlUnity.Http
                         // handle 仍在 multi 中，不做 EasyCleanup。
                         earlyResponse?.InvalidateHandle();
                         if (tcs.TrySetException(curlResp.FailureException))
+                        {
                             Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch,
+                                curlResp.FailureException);
+                        }
                         return;
                     }
 
@@ -214,7 +261,10 @@ namespace CurlUnity.Http
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.UploadError))
+                        {
                             Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch, curlReq.UploadError);
+                        }
                         return;
                     }
                     if (curlReq.DownloadError != null)
@@ -223,7 +273,10 @@ namespace CurlUnity.Http
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         if (tcs.TrySetException(curlReq.DownloadError))
+                        {
                             Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch, curlReq.DownloadError);
+                        }
                         return;
                     }
 
@@ -232,9 +285,13 @@ namespace CurlUnity.Http
                         earlyResponse?.InvalidateHandle();
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
-                        if (tcs.TrySetException(CurlHttpException.FromEasyCode(
-                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode))))
+                        var curlException = CurlHttpException.FromEasyCode(
+                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode));
+                        if (tcs.TrySetException(curlException))
+                        {
                             Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch, curlException);
+                        }
                         return;
                     }
 
@@ -247,15 +304,22 @@ namespace CurlUnity.Http
                     }
                     else
                     {
-                        response = new HttpResponse(_api, curlResp);
+                        response = new HttpResponse(_api, curlResp, _logger, requestId);
                     }
                     Diagnostics?.Record(response);
-                    if (!tcs.TrySetResult(response))
+                    if (tcs.TrySetResult(response))
+                    {
+                        LogRequestCompleted(requestId, requestStopwatch, response.StatusCode);
+                    }
+                    else
+                    {
                         response.Dispose();
+                    }
                 }
                 catch (Exception ex)
                 {
-                    tcs.TrySetException(ex);
+                    if (tcs.TrySetException(ex))
+                        LogRequestFailed(requestId, requestStopwatch, ex);
                 }
                 finally
                 {
@@ -280,7 +344,10 @@ namespace CurlUnity.Http
             // 对 "取消 vs 失败" 的分支判断。
             // SendAsync 入口的 IsDisposed 检查仍用 ODE(那是用法错误,不是运行时中断)。
             foreach (var kv in _pendingTasks)
-                kv.Key.TrySetCanceled();
+            {
+                if (kv.Key.TrySetCanceled())
+                    LogRequestCancelled(kv.Value.RequestId, kv.Value.Stopwatch);
+            }
             _pendingTasks.Clear();
 
             foreach (var kv in _cancellations)
@@ -301,18 +368,19 @@ namespace CurlUnity.Http
             }
             else
             {
-                CurlLog.Error(
-                    "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
-                    "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
+                        "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
             }
         }
 
-        private CurlRequest BuildCurlRequest(HttpRequest request)
+        private CurlRequest BuildCurlRequest(HttpRequest request, long requestId)
         {
             if (request == null)
                 throw new ArgumentNullException(nameof(request));
 
-            var curlReq = new CurlRequest(_api);
+            var curlReq = new CurlRequest(_api, _logger, requestId);
             try
             {
                 ConfigureCurlRequest(curlReq, request);
@@ -366,8 +434,16 @@ namespace CurlUnity.Http
             if (request.TcpKeepAlive)
                 CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
 
-            // CURLOPT_VERBOSE = 41 (CURLOPTTYPE_LONG + 41)。诊断用,默认关。
-            if (Verbose) _api.SetOptLong(h, 41, 1);
+            // 第一版不接管 libcurl 原生日志；Verbose 仍由 libcurl 直接写 stderr。
+            // 日志选项失败不能改变请求语义，因此只告警、不走 CheckSetOpt。
+            if (_logger.IsEnabled(CurlLogLevel.Verbose))
+            {
+                var rcVerbose = _api.SetOptLong(h, CurlNative.CURLOPT_VERBOSE, 1);
+                if (rcVerbose != CurlNative.CURLE_OK)
+                    _logger.Warning(CurlLogCategory.Http,
+                        $"CURLOPT_VERBOSE returned {rcVerbose}: {_api.GetErrorString(rcVerbose)}",
+                        requestId: curlReq.RequestId);
+            }
 
             // HTTP version（枚举值与 curl 定义一致，直接 cast）
             CheckSetOpt("CURLOPT_HTTP_VERSION",
@@ -578,9 +654,50 @@ namespace CurlUnity.Http
         {
             if (_cookieJar != null) return;
             // 允许并发首次请求；CompareExchange 输的一方本地构造的 jar 需被清理。
-            var fresh = new CurlCookieJar(_api);
+            var fresh = new CurlCookieJar(_api, _logger);
             if (Interlocked.CompareExchange(ref _cookieJar, fresh, null) != null)
                 fresh.Dispose();
+        }
+
+        private static string FormatUrlForLog(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                return "<invalid-url>";
+
+            var safeUrl = uri.GetComponents(
+                UriComponents.SchemeAndServer | UriComponents.Path,
+                UriFormat.UriEscaped);
+            if (!string.IsNullOrEmpty(uri.Query))
+                safeUrl += "?<redacted>";
+            return safeUrl;
+        }
+
+        private void LogRequestCompleted(long requestId, Stopwatch stopwatch, int statusCode)
+        {
+            if (stopwatch == null) return;
+            _logger.Verbose(CurlLogCategory.Http,
+                $"completed status={statusCode} elapsed={stopwatch.ElapsedMilliseconds}ms",
+                requestId: requestId);
+        }
+
+        private void LogRequestCancelled(long requestId, Stopwatch stopwatch)
+        {
+            if (stopwatch == null) return;
+            _logger.Verbose(CurlLogCategory.Http,
+                $"cancelled elapsed={stopwatch.ElapsedMilliseconds}ms",
+                requestId: requestId);
+        }
+
+        private void LogRequestFailed(long requestId, Stopwatch stopwatch, Exception exception)
+        {
+            if (stopwatch == null) return;
+
+            var result = exception is CurlHttpException curlException
+                ? $"failed kind={curlException.ErrorKind} curlCode={curlException.CurlCode}"
+                : $"failed type={exception.GetType().Name}";
+            _logger.Verbose(CurlLogCategory.Http,
+                $"{result} elapsed={stopwatch.ElapsedMilliseconds}ms",
+                exception, requestId);
         }
 
         /// <summary>
@@ -602,6 +719,18 @@ namespace CurlUnity.Http
                 CurlHttpException.MapEasyCode(rc),
                 rc,
                 $"curl_easy_setopt({optName}): {_api.GetErrorString(rc)}");
+        }
+
+        private readonly struct RequestLogContext
+        {
+            internal RequestLogContext(long requestId, Stopwatch stopwatch)
+            {
+                RequestId = requestId;
+                Stopwatch = stopwatch;
+            }
+
+            internal long RequestId { get; }
+            internal Stopwatch Stopwatch { get; }
         }
     }
 }
