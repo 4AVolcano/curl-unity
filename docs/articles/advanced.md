@@ -152,6 +152,26 @@ client.PreferredVersion = HttpVersion.Http3Only;
 Debug.Log($"Protocol: {resp.Version}");  // e.g. Http3 / Http2 / Http11
 ```
 
+## DNS 缓存超时
+
+`CurlHttpClient` 默认沿用 libcurl 的 60 秒 DNS 缓存时间。可以按 client 调整：
+
+```csharp
+using var client = new CurlHttpClient
+{
+    DnsCacheTimeoutSeconds = 10,
+};
+```
+
+- 正数：DNS 缓存的最长有效时间（秒）
+- `0`：禁用 DNS 缓存
+- `-1`：永久缓存
+- 小于 `-1`：抛出 `ArgumentOutOfRangeException`
+
+运行时修改只影响之后调用 `SendAsync` 创建的请求；已经创建的请求保留原配置。
+修改该值不会立即清空 DNS 缓存，后续请求查找缓存时会按新的超时值判断已有条目是否过期。
+负缓存的实际时长和缓存条件由随包分发的 libcurl 版本决定。
+
 ## 自动响应解压
 
 默认开启(`AutoDecompressResponse = true`),libcurl 发 `Accept-Encoding: gzip, deflate`,自动解压 `resp.Body`。对 JSON/HTML 下行流量降 3-5x。
