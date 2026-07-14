@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Threading.Tasks;
 using CurlUnity.Core;
 using CurlUnity.Diagnostics;
@@ -142,12 +141,9 @@ namespace CurlUnity.UnitTests.Tests
                 2026, 7, 14, 12, 34, 56, TimeSpan.Zero);
             var entry = new CurlLogEntry(timestamp, CurlLogLevel.Warning,
                 CurlLogCategory.Core, "message", null, 42);
-            var formatter = typeof(DefaultCurlLogSink).GetMethod(
-                "FormatMessage", BindingFlags.Static | BindingFlags.NonPublic);
 
-            Assert.NotNull(formatter);
-            var formatted = Assert.IsType<string>(formatter.Invoke(
-                null, new object[] { entry }));
+            var formatted = DefaultCurlLogSink.FormatMessage(entry);
+
             Assert.Contains(timestamp.ToString("O"), formatted);
         }
 
