@@ -10,6 +10,10 @@ namespace CurlUnity.Core
     internal sealed class CurlLogger
     {
         internal static readonly CurlLogger Default = new CurlLogger(null);
+        internal static readonly CurlLogger Disabled = new CurlLogger(new CurlLogOptions
+        {
+            Level = CurlLogLevel.Off,
+        });
 
         private readonly CurlLogLevel _level;
         private readonly ICurlLogSink _sink;

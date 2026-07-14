@@ -6,6 +6,8 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CurlUnity.Core;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 using CurlUnity.Sse;
 using Xunit;
@@ -106,6 +108,22 @@ namespace CurlUnity.UnitTests.Tests
             public int RedirectCount => 0;
             public IReadOnlyDictionary<string, string[]> Headers => null;
             public void Dispose() => IsDisposed = true;
+        }
+
+        private sealed class CollectingSink : ICurlLogSink
+        {
+            private readonly object _gate = new object();
+            private readonly List<CurlLogEntry> _entries = new List<CurlLogEntry>();
+
+            public CurlLogEntry[] Snapshot()
+            {
+                lock (_gate) return _entries.ToArray();
+            }
+
+            public void Write(CurlLogEntry entry)
+            {
+                lock (_gate) _entries.Add(entry);
+            }
         }
 
         private static SseConnectionOptions ZeroDelay() => new SseConnectionOptions
@@ -255,6 +273,59 @@ namespace CurlUnity.UnitTests.Tests
             Exception first;
             lock (errors) first = errors[0];
             Assert.Same(boom, first);
+        }
+
+        [Fact]
+        public async Task Verbose_LogsStateReconnectAndTerminalReason()
+        {
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions
+            {
+                Level = CurlLogLevel.Verbose,
+                Sink = sink,
+            });
+            var client = new ControllableHttpClient(idx => idx == 0
+                ? Behavior.Throw(new IOException("boom"))
+                : Behavior.Block());
+            using var conn = new SseConnection(
+                client, Factory(), ZeroDelay(), CancellationToken.None,
+                logger: logger);
+
+            await WaitUntil(() => client.HeadersReceivedCount >= 2);
+            conn.Dispose();
+            await conn.Completion;
+
+            var entries = sink.Snapshot()
+                .Where(entry => entry.Category == CurlLogCategory.Sse)
+                .ToArray();
+            Assert.Contains(entries, entry => entry.Message.Contains("state=Connecting"));
+            Assert.Contains(entries, entry => entry.Message.Contains("state=Connecting->Open"));
+            Assert.Contains(entries, entry =>
+                entry.Message.Contains("reconnect attempt=1") &&
+                entry.Message.Contains("waitMs=0") &&
+                entry.Message.Contains("reason=IOException"));
+            Assert.Contains(entries, entry => entry.Message.Contains("terminal reason=cancelled"));
+            Assert.All(entries, entry => Assert.Null(entry.RequestId));
+        }
+
+        [Fact]
+        public async Task Warning_DoesNotLogSseFlow()
+        {
+            var sink = new CollectingSink();
+            var logger = new CurlLogger(new CurlLogOptions
+            {
+                Level = CurlLogLevel.Warning,
+                Sink = sink,
+            });
+            var client = new ControllableHttpClient(_ => Behavior.Eof(204));
+            using var conn = new SseConnection(
+                client, Factory(), ZeroDelay(), CancellationToken.None,
+                logger: logger);
+
+            await conn.Completion;
+
+            Assert.DoesNotContain(sink.Snapshot(),
+                entry => entry.Category == CurlLogCategory.Sse);
         }
 
         [Fact]

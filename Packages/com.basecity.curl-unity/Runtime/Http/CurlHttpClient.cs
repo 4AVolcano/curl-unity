@@ -44,6 +44,8 @@ namespace CurlUnity.Http
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
 
+        internal CurlLogger Logger => _logger;
+
         /// <summary>全局 HTTP 版本偏好。对所有后续请求生效。默认 PreferH3。</summary>
         public HttpVersion PreferredVersion { get; set; } = HttpVersion.PreferH3;
 

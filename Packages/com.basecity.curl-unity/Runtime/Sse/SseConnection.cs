@@ -2,6 +2,8 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using CurlUnity.Core;
+using CurlUnity.Diagnostics;
 using CurlUnity.Http;
 
 namespace CurlUnity.Sse
@@ -18,7 +20,11 @@ namespace CurlUnity.Sse
     /// </remarks>
     internal sealed class SseConnection : ISseConnection
     {
+        private static long s_nextConnectionId;
+
         private readonly IHttpClient _client;
+        private readonly CurlLogger _logger;
+        private readonly long _connectionId;
         private readonly Func<CancellationToken, Task<HttpRequest>> _requestFactory;
         private readonly SseConnectionOptions _options;
         private readonly SseEventParser _parser = new SseEventParser();
@@ -50,13 +56,19 @@ namespace CurlUnity.Sse
             SseConnectionOptions options, CancellationToken ct,
             Action<SseEvent> onEvent = null,
             Action<Exception> onError = null,
-            Action<SseConnectionState, SseConnectionState> onStateChanged = null)
+            Action<SseConnectionState, SseConnectionState> onStateChanged = null,
+            CurlLogger logger = null)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _requestFactory = requestFactory ?? throw new ArgumentNullException(nameof(requestFactory));
 
             _options = options ?? new SseConnectionOptions();
             ValidateOptions(_options); // 非法配置 fail-fast，避免循环里静默关闭/反复报错
+
+            _logger = logger ?? (client as CurlHttpClient)?.Logger ?? CurlLogger.Disabled;
+            _connectionId = Interlocked.Increment(ref s_nextConnectionId);
+            _logger.Verbose(CurlLogCategory.Sse,
+                $"connection={_connectionId} state=Connecting");
 
             // 解析器防护上限（setter 自带正数校验，非法值在此 fail-fast）
             _parser.MaxLineBytes = _options.MaxLineBytes;
@@ -110,7 +122,9 @@ namespace CurlUnity.Sse
             Exception lastError = null; // 最近一次失败原因（干净 EOF 为 null），用于 ShouldReconnect / 放弃异常
             Exception terminalError = null; // 工厂返回非法 SSE 请求：确定性配置错误，不重连
             int attempts = 0;           // 当前失败连续计数（建立成功后清零）
+            int reconnects = 0;         // 当前连接生命周期内的重连总次数（仅用于日志）
             bool exhausted = false;     // 达到次数/时长上限而放弃
+            string terminalReason = null;
             try
             {
                 var delay = _options.ReconnectDelayInit; // 当前退避基准
@@ -134,6 +148,7 @@ namespace CurlUnity.Sse
                         {
                             terminalError = new InvalidOperationException(
                                 "SSE requestFactory 不能返回 null Task。");
+                            terminalReason = "configuration-error";
                             RaiseError(terminalError);
                             break;
                         }
@@ -144,6 +159,7 @@ namespace CurlUnity.Sse
                         if (configurationError != null)
                         {
                             terminalError = configurationError;
+                            terminalReason = "configuration-error";
                             RaiseError(configurationError);
                             break;
                         }
@@ -189,10 +205,16 @@ namespace CurlUnity.Sse
                         // 非 2xx 已由 RunOneConnectionAsync 的 OnHeadersReceived 抛 SseHttpStatusException
                         // （body 到达前），不会解析出伪事件、也不会触发 OnByte（hadByte 保持 false）。到这里一定是 2xx。
                         if (resp.StatusCode == 204)
+                        {
                             terminal = true; // SSE 规范：204 No Content = 服务端要求停止重连
+                            terminalReason = "server-http-204";
+                        }
                     }
                     catch (OperationCanceledException) when (_linkedCt.IsCancellationRequested)
                     {
+                        terminalReason = Volatile.Read(ref _callbackFault) == null
+                            ? "cancelled"
+                            : "callback-fault";
                         break; // 用户 Dispose / 取消（或回调异常触发的取消）→ 退出
                     }
                     catch (OperationCanceledException)
@@ -213,8 +235,18 @@ namespace CurlUnity.Sse
                     }
 
                     if (terminal) break;                                   // 204
-                    if (_linkedCt.IsCancellationRequested) break;          // Dispose/取消
-                    if (Volatile.Read(ref _callbackFault) != null) break;  // 回调抛错 → 终止（Completion fault）
+                    if (_linkedCt.IsCancellationRequested)
+                    {
+                        terminalReason = Volatile.Read(ref _callbackFault) == null
+                            ? "cancelled"
+                            : "callback-fault";
+                        break;                                             // Dispose/取消
+                    }
+                    if (Volatile.Read(ref _callbackFault) != null)
+                    {
+                        terminalReason = "callback-fault";
+                        break;                                             // 回调抛错 → 终止（Completion fault）
+                    }
 
                     // 「是否真正建立」只看本轮是否收到字节 + 存活是否达 BackoffResetThreshold，与连接
                     // 「如何结束」无关——干净 EOF / 网络错误 / 空闲超时 一视同仁。生产中连接绝大多数以错误或
@@ -229,7 +261,11 @@ namespace CurlUnity.Sse
                         bool ok;
                         try { ok = _options.ShouldReconnect(lastError); }
                         catch (Exception ex) { FaultFromCallback(ex); break; }
-                        if (!ok) break; // 用户判定停止 → 优雅结束
+                        if (!ok)
+                        {
+                            terminalReason = "reconnect-declined";
+                            break; // 用户判定停止 → 优雅结束
+                        }
                     }
 
                     if (established)
@@ -246,6 +282,7 @@ namespace CurlUnity.Sse
                             (_options.MaxElapsedReconnectTime is TimeSpan max && streakSw.Elapsed >= max))
                         {
                             exhausted = true;
+                            terminalReason = "reconnect-exhausted";
                             break;
                         }
                     }
@@ -253,8 +290,21 @@ namespace CurlUnity.Sse
                     SetState(SseConnectionState.Reconnecting);
 
                     var wait = ComputeWait(delay); // retry: 优先 + 上限 clamp + jitter
+                    reconnects++;
+                    var reconnectReason = lastError == null
+                        ? "eof"
+                        : lastError.GetType().Name;
+                    _logger.Verbose(CurlLogCategory.Sse,
+                        $"connection={_connectionId} reconnect attempt={reconnects} " +
+                        $"waitMs={wait.TotalMilliseconds:0.###} reason={reconnectReason}");
                     try { await _delay(wait, _linkedCt.Token).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
+                    catch (OperationCanceledException)
+                    {
+                        terminalReason = Volatile.Read(ref _callbackFault) == null
+                            ? "cancelled"
+                            : "callback-fault";
+                        break;
+                    }
 
                     if (!established)
                         delay = _options.ReconnectDelayIncFn(delay); // 仅未建立时递增退避
@@ -262,18 +312,29 @@ namespace CurlUnity.Sse
             }
             catch (Exception ex)
             {
+                terminalReason = "callback-fault";
                 FaultFromCallback(ex); // 兜底：保证后台循环任何未预期异常都可观测，不会成为未观测 Task 异常
             }
             finally
             {
                 SetState(SseConnectionState.Closed); // 终态在后台线程触发（不在 Dispose 调用线程）
+                var cb = Volatile.Read(ref _callbackFault);
+                if (cb != null) terminalReason = "callback-fault";
+                else if (terminalError != null) terminalReason = "configuration-error";
+                else if (exhausted) terminalReason = "reconnect-exhausted";
+                else if (terminalReason == null)
+                    terminalReason = _linkedCt.IsCancellationRequested ? "cancelled" : "completed";
+
+                var terminalException = cb ?? terminalError ?? (exhausted ? lastError : null);
+                _logger.Verbose(CurlLogCategory.Sse,
+                    $"connection={_connectionId} terminal reason={terminalReason}",
+                    terminalException);
                 lock (_ctsGate)
                 {
                     _linkedCt.Dispose();
                     _disposeCts.Dispose();
                     _ctsDisposed = true;
                 }
-                var cb = Volatile.Read(ref _callbackFault);
                 if (cb != null) _completion.TrySetException(cb);
                 else if (terminalError != null) _completion.TrySetException(terminalError);
                 else if (exhausted) _completion.TrySetException(new SseReconnectExhaustedException(attempts, lastError));
@@ -308,6 +369,8 @@ namespace CurlUnity.Sse
                 if (prev == (int)next) return;
                 if (Interlocked.CompareExchange(ref _state, (int)next, prev) == prev)
                 {
+                    _logger.Verbose(CurlLogCategory.Sse,
+                        $"connection={_connectionId} state={(SseConnectionState)prev}->{next}");
                     var h = OnStateChanged;
                     if (h != null)
                     {
