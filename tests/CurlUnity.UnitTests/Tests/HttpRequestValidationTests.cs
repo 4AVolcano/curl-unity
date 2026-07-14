@@ -150,6 +150,52 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task SendAsync_DnsCacheTimeout_UsesCurrentClientValue()
+        {
+            var api = new FakeCurlApi();
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+            };
+            using var client = new CurlHttpClient(api);
+
+            async Task<long> SendAndReadTimeoutAsync()
+            {
+                var responseTask = client.SendAsync(
+                    new HttpRequest { Url = "http://example.invalid/" });
+                var state = api.GetEasyHandleState(api.LastEasyHandle);
+                var timeout = state.LongOptions[CurlNative.CURLOPT_DNS_CACHE_TIMEOUT];
+                using var response = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
+                return timeout;
+            }
+
+            Assert.Equal(60, await SendAndReadTimeoutAsync());
+
+            client.DnsCacheTimeoutSeconds = 10;
+            Assert.Equal(10, await SendAndReadTimeoutAsync());
+
+            client.DnsCacheTimeoutSeconds = 0;
+            Assert.Equal(0, await SendAndReadTimeoutAsync());
+
+            client.DnsCacheTimeoutSeconds = -1;
+            Assert.Equal(-1, await SendAndReadTimeoutAsync());
+        }
+
+        [Theory]
+        [InlineData(-2)]
+        [InlineData(int.MinValue)]
+        public void DnsCacheTimeoutSeconds_BelowMinusOne_Throws(int value)
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => client.DnsCacheTimeoutSeconds = value);
+        }
+
+        [Fact]
         public async Task SendAsync_LowSpeedPair_SetsBothOptions()
         {
             var api = new FakeCurlApi();

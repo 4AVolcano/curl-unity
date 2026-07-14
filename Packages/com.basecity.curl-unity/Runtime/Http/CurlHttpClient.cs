@@ -40,6 +40,7 @@ namespace CurlUnity.Http
         private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, RequestLogContext> _pendingTasks = new();
         private CurlCookieJar _cookieJar;  // lazy：首次用到 EnableCookies 时初始化
         private volatile HttpProxy _proxy; // null = 不走代理（默认）；引用赋值天然原子
+        private int _dnsCacheTimeoutSeconds = 60;
         private int _disposedFlag;
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
@@ -52,6 +53,22 @@ namespace CurlUnity.Http
 
         /// <summary>是否验证 SSL 证书。默认 true。</summary>
         public bool VerifySSL { get; set; } = true;
+
+        /// <summary>
+        /// DNS 缓存超时（秒）。对之后创建的请求生效。默认 60；0 = 禁用缓存；
+        /// -1 = 永久缓存。
+        /// </summary>
+        public int DnsCacheTimeoutSeconds
+        {
+            get => Volatile.Read(ref _dnsCacheTimeoutSeconds);
+            set
+            {
+                if (value < -1)
+                    throw new ArgumentOutOfRangeException(nameof(value),
+                        "DnsCacheTimeoutSeconds must be >= -1 (-1 = cache forever).");
+                Volatile.Write(ref _dnsCacheTimeoutSeconds, value);
+            }
+        }
 
         /// <summary>
         /// 默认 User-Agent。对所有请求生效;请求级 <see cref="HttpRequest.Headers"/>
@@ -428,6 +445,12 @@ namespace CurlUnity.Http
 
             // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
             CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
+
+            // DNS 缓存属于 multi handle，但有效期由发起查询的 easy handle 决定。
+            // client 属性在构建请求时读取，因此运行时修改只影响之后创建的请求。
+            CheckSetOpt("CURLOPT_DNS_CACHE_TIMEOUT",
+                _api.SetOptLong(h, CurlNative.CURLOPT_DNS_CACHE_TIMEOUT,
+                    DnsCacheTimeoutSeconds));
 
             // TCP keep-alive：SSE 等长连接内部开启（HttpRequest 内部字段，不对外暴露）。
             // 不处理 Nagle：libcurl 默认 TCP_NODELAY=1（Nagle 已关），无需设置。
