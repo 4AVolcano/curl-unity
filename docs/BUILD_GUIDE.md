@@ -165,9 +165,22 @@ iOS 和 Android 的交叉编译会触发 CMake 的路径隔离机制（`CMAKE_FI
 -DBUILD_SHARED_LIBS=ON            # libcurl 编译为动态库（P/Invoke 需要）
 -DBUILD_STATIC_LIBS=OFF           # 不额外生成静态库
 
+# === 禁用附属构建目标 ===
+-DBUILD_TESTING=OFF               # 不构建 curl 测试
+-DBUILD_EXAMPLES=OFF              # 不构建示例程序
+-DBUILD_LIBCURL_DOCS=OFF          # 不生成 libcurl man pages
+-DBUILD_MISC_DOCS=OFF             # 不生成 curl-config 等杂项文档
+-DENABLE_CURL_MANUAL=OFF          # 不生成 curl CLI 手册
+
 # === SSL/TLS ===
 -DCURL_ENABLE_SSL=ON
 -DCURL_USE_OPENSSL=ON             # 使用 OpenSSL 后端
+
+# === 依赖发现与 DNS ===
+-DCURL_USE_PKGCONFIG=OFF          # 禁止从宿主机 pkg-config 引入依赖
+-DENABLE_ARES=OFF                 # 不使用 c-ares
+-DENABLE_THREADED_RESOLVER=ON     # 使用线程 DNS resolver
+-DENABLE_IPV6=ON                  # 保留 IPv6 支持
 
 # === HTTP/2 + HTTP/3 ===
 -DUSE_NGHTTP2=ON                  # 启用 HTTP/2
@@ -182,6 +195,7 @@ iOS 和 Android 的交叉编译会触发 CMake 的路径隔离机制（`CMAKE_FI
 -DCURL_USE_LIBPSL=OFF             # 禁用 Public Suffix List
 -DCURL_USE_LIBSSH2=OFF            # 禁用 SSH
 -DCURL_USE_LIBSSH=OFF             # 禁用 SSH
+-DCURL_ZLIB=ON                    # 强制启用 gzip/deflate；找不到 zlib 时配置失败
 -DCURL_BROTLI=OFF                 # 禁用 Brotli 压缩（避免链接系统动态库）
 -DCURL_ZSTD=OFF                   # 禁用 Zstd 压缩（同上）
 -DUSE_LIBIDN2=OFF                 # 禁用 IDN 国际化域名（同上）
@@ -196,7 +210,6 @@ iOS 和 Android 的交叉编译会触发 CMake 的路径隔离机制（`CMAKE_FI
 -DCURL_DISABLE_VERBOSE_STRINGS=OFF # 去除冗余字符串（减小体积）
 -DCURL_DISABLE_MANUAL=ON          # 去除内置手册
 -DCURL_LTO=ON                     # 启用 Link Time Optimization
--DENABLE_CURL_MANUAL=OFF          # 不生成手册
 ```
 
 > **注意**：`HTTP_ONLY=ON` 已经会自动禁用非 HTTP 协议（FTP/DICT/GOPHER/IMAP/POP3/SMTP/TELNET/TFTP/RTSP/MQTT 等），无需再逐个设置对应的 `CURL_DISABLE_*`。
@@ -216,7 +229,11 @@ iOS 和 Android 的交叉编译会触发 CMake 的路径隔离机制（`CMAKE_FI
 | `CURL_DISABLE_BEARER_AUTH` | OFF | **保留** | Bearer 认证 |
 | `CURL_DISABLE_DIGEST_AUTH` | OFF | 按需 | Digest 认证 |
 | `CURL_DISABLE_WEBSOCKETS` | OFF | 按需 | WebSocket 支持 |
+| `CURL_USE_PKGCONFIG` | 平台相关 | **禁用** | 避免从宿主机 pkg-config 意外引入依赖 |
+| `ENABLE_ARES` | OFF | **禁用** | 不引入 c-ares，使用线程 resolver |
+| `ENABLE_THREADED_RESOLVER` | ON（未启用 c-ares 时） | **保留** | 异步线程 DNS 解析 |
 | `ENABLE_IPV6` | ON | **保留** | IPv6 支持 |
+| `CURL_ZLIB` | AUTO | **启用** | 强制 gzip/deflate 支持，缺失 zlib 时配置失败 |
 
 ---
 
@@ -404,13 +421,23 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/curl -S $PROJECT_ROOT/curl -G Ninja \
   -DBUILD_CURL_EXE=OFF \
   -DBUILD_SHARED_LIBS=ON \
   -DBUILD_STATIC_LIBS=OFF \
+  -DBUILD_TESTING=OFF \
+  -DBUILD_EXAMPLES=OFF \
+  -DBUILD_LIBCURL_DOCS=OFF \
+  -DBUILD_MISC_DOCS=OFF \
+  -DENABLE_CURL_MANUAL=OFF \
   -DCURL_ENABLE_SSL=ON \
   -DCURL_USE_OPENSSL=ON \
+  -DCURL_USE_PKGCONFIG=OFF \
+  -DENABLE_ARES=OFF \
+  -DENABLE_THREADED_RESOLVER=ON \
+  -DENABLE_IPV6=ON \
   -DUSE_NGHTTP2=ON \
   -DUSE_NGTCP2=ON \
   -DHTTP_ONLY=ON \
   -DCURL_USE_LIBPSL=OFF \
   -DCURL_USE_LIBSSH2=OFF \
+  -DCURL_ZLIB=ON \
   -DCURL_DISABLE_LDAP=ON \
   -DCURL_DISABLE_LDAPS=ON \
   -DCURL_DISABLE_AWS=ON \
@@ -535,14 +562,24 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/curl -S $PROJECT_ROOT/curl -G Ninja \
   -DBUILD_CURL_EXE=OFF \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_STATIC_LIBS=ON \
+  -DBUILD_TESTING=OFF \
+  -DBUILD_EXAMPLES=OFF \
+  -DBUILD_LIBCURL_DOCS=OFF \
+  -DBUILD_MISC_DOCS=OFF \
+  -DENABLE_CURL_MANUAL=OFF \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCURL_ENABLE_SSL=ON \
   -DCURL_USE_OPENSSL=ON \
+  -DCURL_USE_PKGCONFIG=OFF \
+  -DENABLE_ARES=OFF \
+  -DENABLE_THREADED_RESOLVER=ON \
+  -DENABLE_IPV6=ON \
   -DUSE_NGHTTP2=ON \
   -DUSE_NGTCP2=ON \
   -DHTTP_ONLY=ON \
   -DCURL_USE_LIBPSL=OFF \
   -DCURL_USE_LIBSSH2=OFF \
+  -DCURL_ZLIB=ON \
   -DCURL_DISABLE_LDAP=ON \
   -DCURL_DISABLE_LDAPS=ON \
   -DCURL_DISABLE_AWS=ON \
@@ -649,15 +686,25 @@ cmake -B %PROJECT_ROOT%\build\%PLATFORM%\curl -S %DEPS_SRC%\curl -G Ninja ^
   -DBUILD_CURL_EXE=OFF ^
   -DBUILD_SHARED_LIBS=ON ^
   -DBUILD_STATIC_LIBS=OFF ^
+  -DBUILD_TESTING=OFF ^
+  -DBUILD_EXAMPLES=OFF ^
+  -DBUILD_LIBCURL_DOCS=OFF ^
+  -DBUILD_MISC_DOCS=OFF ^
+  -DENABLE_CURL_MANUAL=OFF ^
   -DCMAKE_C_FLAGS="/D_WIN32_WINNT=%WIN_MIN_VER%" ^
   -DCURL_TARGET_WINDOWS_VERSION=%WIN_MIN_VER% ^
   -DCURL_ENABLE_SSL=ON ^
   -DCURL_USE_OPENSSL=ON ^
+  -DCURL_USE_PKGCONFIG=OFF ^
+  -DENABLE_ARES=OFF ^
+  -DENABLE_THREADED_RESOLVER=ON ^
+  -DENABLE_IPV6=ON ^
   -DUSE_NGHTTP2=ON ^
   -DUSE_NGTCP2=ON ^
   -DHTTP_ONLY=ON ^
   -DCURL_USE_LIBPSL=OFF ^
   -DCURL_USE_LIBSSH2=OFF ^
+  -DCURL_ZLIB=ON ^
   -DCURL_DISABLE_LDAP=ON ^
   -DCURL_DISABLE_LDAPS=ON ^
   -DCURL_DISABLE_AWS=ON ^
@@ -845,13 +892,23 @@ cmake -B $PROJECT_ROOT/build/$PLATFORM/curl -S $PROJECT_ROOT/curl -G Ninja \
   -DBUILD_CURL_EXE=OFF \
   -DBUILD_SHARED_LIBS=ON \
   -DBUILD_STATIC_LIBS=OFF \
+  -DBUILD_TESTING=OFF \
+  -DBUILD_EXAMPLES=OFF \
+  -DBUILD_LIBCURL_DOCS=OFF \
+  -DBUILD_MISC_DOCS=OFF \
+  -DENABLE_CURL_MANUAL=OFF \
   -DCURL_ENABLE_SSL=ON \
   -DCURL_USE_OPENSSL=ON \
+  -DCURL_USE_PKGCONFIG=OFF \
+  -DENABLE_ARES=OFF \
+  -DENABLE_THREADED_RESOLVER=ON \
+  -DENABLE_IPV6=ON \
   -DUSE_NGHTTP2=ON \
   -DUSE_NGTCP2=ON \
   -DHTTP_ONLY=ON \
   -DCURL_USE_LIBPSL=OFF \
   -DCURL_USE_LIBSSH2=OFF \
+  -DCURL_ZLIB=ON \
   -DCURL_DISABLE_LDAP=ON \
   -DCURL_DISABLE_LDAPS=ON \
   -DCURL_DISABLE_AWS=ON \
@@ -1011,7 +1068,7 @@ public static class CurlNative
 - **交叉编译时找不到 OpenSSL（iOS/Android）**：CMake 交叉编译会启用路径隔离，`CMAKE_PREFIX_PATH` 和 `OPENSSL_ROOT_DIR` 可能被忽略。必须同时设置 `-DCMAKE_FIND_ROOT_PATH=$PREFIX`，见 [3.3 交叉编译路径隔离](#33-交叉编译路径隔离)。
 - **找不到 OpenSSL（macOS 本机）**：检查 `CMAKE_PREFIX_PATH` 或 `OPENSSL_ROOT_DIR` 是否指向正确路径。
 - **找不到 nghttp2/ngtcp2**：确保 `CMAKE_PREFIX_PATH` 包含所有依赖的安装路径。
-- **链接了系统 Homebrew 的动态库**：如果 `otool -L` 显示链接了 `/opt/homebrew/...` 的 dylib，检查：1) 依赖是否确实编译为静态库（nghttp2 用 `BUILD_SHARED_LIBS`，nghttp3/ngtcp2 用 `ENABLE_SHARED_LIB`，变量名不同）；2) install 目录中是否有残留的旧 `.dylib` 文件需要清理；3) libcurl 的 CMake 参数是否设置了 `CURL_BROTLI=OFF`、`CURL_ZSTD=OFF`、`USE_LIBIDN2=OFF`。
+- **链接了系统 Homebrew 的动态库**：如果 `otool -L` 显示链接了 `/opt/homebrew/...` 的 dylib，检查：1) 依赖是否确实编译为静态库（nghttp2 用 `BUILD_SHARED_LIBS`，nghttp3/ngtcp2 用 `ENABLE_SHARED_LIB`，变量名不同）；2) install 目录中是否有残留的旧 `.dylib` 文件需要清理；3) libcurl 的 CMake 参数是否设置了 `CURL_BROTLI=OFF`、`CURL_ZSTD=OFF`、`USE_LIBIDN2=OFF`；4) 是否设置了 `CURL_USE_PKGCONFIG=OFF`，防止 pkg-config 从宿主机发现 Homebrew 依赖。
 - **依赖库的 git submodule 缺失**：nghttp2/nghttp3/ngtcp2 都有子模块（sfparse、munit 等）。如果 `git clone --depth 1` 下载的源码，需要执行 `git submodule update --init` 初始化子模块，否则编译会报 "Cannot find source file" 错误。
 - **链接错误 undefined symbol**：检查依赖编译顺序，ngtcp2 依赖 OpenSSL 和 nghttp3。
 - **静态链接时符号缺失**：确保依赖库编译时加了 `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`（或 OpenSSL 的 `-fPIC`）。
