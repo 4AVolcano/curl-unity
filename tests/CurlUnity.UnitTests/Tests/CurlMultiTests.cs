@@ -21,6 +21,7 @@ namespace CurlUnity.UnitTests.Tests
     /// 这些路径真实触发要么需要 curl 内部错误(实际碰不到), 要么 race condition,
     /// 集成测试跑不出。FakeCurlApi 注入让我们精确触发每个分支。
     /// </summary>
+    [Collection("CurlGlobal")]
     public class CurlMultiTests
     {
         [Fact]
