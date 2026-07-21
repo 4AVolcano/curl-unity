@@ -30,6 +30,7 @@ namespace CurlUnity.Core
         private static readonly CurlNative.WriteCallback s_writeCb = OnWriteData;
         private static readonly CurlNative.WriteCallback s_headerCb = OnHeaderData;
         private static readonly CurlNative.WriteCallback s_readCb = OnReadData;
+        private static readonly CurlNative.PrereqCallback s_beforeSendRequestCb = OnBeforeSendRequest;
 
         private readonly ICurlApi _api;
         private readonly CurlLogger _logger;
@@ -146,9 +147,21 @@ namespace CurlUnity.Core
                         _api.SetOptReadData(request.Handle, ptr), request)) return;
             }
 
+            // 在连接/协议协商完成、请求即将发送时通知。PREREQFUNCTION 对新连接和
+            // 复用连接都提供同一个语义边界；重定向时同一 easy handle 可能多次触发。
+            if (request.BeforeSendRequestCallback != null)
+            {
+                if (!TrySetOpt("CURLOPT_PREREQFUNCTION",
+                        _api.SetOptPrereqFunction(request.Handle, s_beforeSendRequestCb), request)) return;
+                if (!TrySetOpt("CURLOPT_PREREQDATA",
+                        _api.SetOptPrereqData(request.Handle, ptr), request)) return;
+            }
+
             // header callback: 捕获原始 headers 或观察完整 header block 时设置。
             // CONNECT 代理握手头不属于 origin response，交给 libcurl 在 native 层过滤。
-            if (request.CaptureHeaders || request.HeadersReceivedCallback != null)
+            if (request.CaptureHeaders
+                || request.HeaderReceivedCallback != null
+                || request.HeadersReceivedCallback != null)
             {
                 if (request.CaptureHeaders)
                     request.HeaderBuffer = new MemoryStream(2048);
@@ -597,15 +610,53 @@ namespace CurlUnity.Core
         }
 
 #if UNITY_5_3_OR_NEWER
+        [MonoPInvokeCallback(typeof(CurlNative.PrereqCallback))]
+#endif
+        private static int OnBeforeSendRequest(
+            IntPtr userdata,
+            IntPtr connPrimaryIp,
+            IntPtr connLocalIp,
+            int connPrimaryPort,
+            int connLocalPort)
+        {
+            CurlRequest request;
+            try { request = (CurlRequest)GCHandle.FromIntPtr(userdata).Target; }
+            catch (Exception resolveEx)
+            {
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnBeforeSendRequest: failed to resolve CurlRequest from userdata " +
+                        $"(userdata=0x{userdata.ToInt64():X}): {resolveEx.GetType().Name}: {resolveEx.Message}");
+                return CurlNative.CURL_PREREQFUNC_ABORT;
+            }
+            if (request == null)
+            {
+                if (CurlLogger.Default.IsEnabled(CurlLogLevel.Error))
+                    CurlLogger.Default.Error(CurlLogCategory.Core,
+                        $"OnBeforeSendRequest: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
+                return CurlNative.CURL_PREREQFUNC_ABORT;
+            }
+
+            try
+            {
+                request.BeforeSendRequestCallback?.Invoke();
+                return CurlNative.CURL_PREREQFUNC_OK;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref request.DownloadError, ex, null);
+                return CurlNative.CURL_PREREQFUNC_ABORT;
+            }
+        }
+
+#if UNITY_5_3_OR_NEWER
         [MonoPInvokeCallback(typeof(CurlNative.WriteCallback))]
 #endif
         private static UIntPtr OnHeaderData(IntPtr ptr, UIntPtr size, UIntPtr nmemb, IntPtr userdata)
         {
-            // Header capture 是 best-effort：本回调里的任何失败都只导致 response.Headers
-            // 空缺，Body/StatusCode 不受影响。因此所有失败路径都返回 length（告诉 curl
-            // "已消费"，传输继续），而不是返回 0 触发 CURLE_WRITE_ERROR 把整个请求
-            // 打断成一个语义含糊的错误。与 OnWriteData（body 完整性 fatal，必须中止）
-            // 刻意不同。
+            // 原始 header 捕获/解析是 best-effort：失败只让 response.Headers 缺失，仍返回
+            // length 继续传输。HeaderReceivedCallback 则是传输语义回调；若它抛异常，和
+            // OnWriteData 用户回调一致，记录原异常并返回 0 中止。
             var length = size.ToUInt64() * nmemb.ToUInt64();
             if (length == 0) return UIntPtr.Zero; // 消费 0 字节 == length，语义一致
             if (length > int.MaxValue)
@@ -637,6 +688,20 @@ namespace CurlUnity.Core
                         $"OnHeaderData: GCHandle.Target is null (userdata=0x{userdata.ToInt64():X})");
                 return lengthResult;
             }
+
+            try
+            {
+                request.HeaderReceivedCallback?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref request.DownloadError, ex, null);
+                return UIntPtr.Zero;
+            }
+
+            // 只有逐段 header 事件时无需复制或解析 native 数据。
+            if (request.HeaderBuffer == null && request.HeadersReceivedCallback == null)
+                return lengthResult;
 
             byte[] buffer;
             try

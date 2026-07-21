@@ -48,11 +48,15 @@ namespace CurlUnity.UnitTests.Tests
         {
             private readonly Func<int, Behavior> _plan;
             private int _calls;
+            private int _beforeSendRequest;
             private int _headersReceived;
             public readonly List<HttpRequest> Requests = new();
+            public Task BeforeSendRequestGate = Task.CompletedTask;
             public Task HeadersGate = Task.CompletedTask; // 默认不拦；需要确定性的用例设为未完成的 TCS
             public Task BodyGate = Task.CompletedTask; // 可单独拦 body，验证仅收到 headers 时的状态
+            public bool InvokeInternalTransportCallbacks = true;
             public int CallCount => Volatile.Read(ref _calls);
+            public int BeforeSendRequestCount => Volatile.Read(ref _beforeSendRequest);
             public int HeadersReceivedCount => Volatile.Read(ref _headersReceived);
             public CurlLogOptions LogOptions { get; }
 
@@ -65,16 +69,26 @@ namespace CurlUnity.UnitTests.Tests
 
             public async Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct)
             {
-                await HeadersGate.WaitAsync(ct).ConfigureAwait(false);
                 int idx = Interlocked.Increment(ref _calls) - 1;
                 lock (Requests) Requests.Add(request);
                 var b = _plan(idx);
+
+                await BeforeSendRequestGate.WaitAsync(ct).ConfigureAwait(false);
+                if (InvokeInternalTransportCallbacks && request.OnBeforeSendRequest != null)
+                {
+                    request.OnBeforeSendRequest();
+                    Interlocked.Increment(ref _beforeSendRequest);
+                }
+
+                await HeadersGate.WaitAsync(ct).ConfigureAwait(false);
 
                 var response = new StubResponse(b.StatusCode);
                 for (int i = 0; i < b.HeaderCallbackCount; i++)
                 {
                     try
                     {
+                        if (InvokeInternalTransportCallbacks)
+                            request.OnHeaderReceived?.Invoke();
                         request.OnHeadersReceived?.Invoke(response);
                     }
                     finally
@@ -223,28 +237,21 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
-        public async Task IdleTimeout_DoesNotRunBeforeAcceptedHeaders()
+        public async Task IdleTimeout_DoesNotRunBeforeRequestIsReadyToSend()
         {
-            var attemptStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var headersGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var beforeSendGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var errors = new List<Exception>();
             var options = ZeroDelay();
             options.IdleTimeout = TimeSpan.FromMilliseconds(20);
             var client = new ControllableHttpClient(_ => Behavior.Block())
             {
-                HeadersGate = headersGate.Task,
+                BeforeSendRequestGate = beforeSendGate.Task,
             };
 
-            Task<HttpRequest> CreateRequest(CancellationToken _)
-            {
-                attemptStarted.TrySetResult(true);
-                return Task.FromResult(new HttpRequest { Url = "http://x" });
-            }
-
-            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
                 onError: e => { lock (errors) errors.Add(e); });
 
-            await attemptStarted.Task;
+            await WaitUntil(() => client.CallCount == 1);
             await Task.Delay(200);
 
             lock (errors) Assert.Empty(errors);
@@ -255,14 +262,19 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
-        public async Task IdleTimeout_FiresAfterAcceptedHeadersWhenBodyIsSilent()
+        public async Task IdleTimeout_FiresAfterRequestIsReadyToSendBeforeHeaders()
         {
+            var headersGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var errors = new List<Exception>();
             var states = new List<SseConnectionState>();
             var options = ZeroDelay();
-            options.IdleTimeout = TimeSpan.FromMilliseconds(20);
+            options.IdleTimeout = TimeSpan.FromMilliseconds(30);
             options.ShouldReconnect = _ => false;
-            var client = new ControllableHttpClient(_ => Behavior.Block());
+            var client = new ControllableHttpClient(_ => Behavior.Block())
+            {
+                HeadersGate = headersGate.Task,
+            };
+
             using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
                 onError: e => { lock (errors) errors.Add(e); },
                 onStateChanged: (_, next) => { lock (states) states.Add(next); });
@@ -271,7 +283,70 @@ namespace CurlUnity.UnitTests.Tests
 
             Assert.Same(conn.Completion, completed);
             await conn.Completion;
+            TimeoutException timeout;
+            lock (errors) timeout = Assert.IsType<TimeoutException>(Assert.Single(errors));
+            Assert.Contains("before accepted headers", timeout.Message);
+            lock (states) Assert.DoesNotContain(SseConnectionState.Open, states);
+        }
+
+        [Fact]
+        public async Task HeaderReceived_RefreshesIdleTimeoutBeforeHeadersComplete()
+        {
+            var headersGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var errors = new List<Exception>();
+            var options = ZeroDelay();
+            options.IdleTimeout = TimeSpan.FromMilliseconds(250);
+            options.ShouldReconnect = _ => false;
+            var client = new ControllableHttpClient(_ => Behavior.Block())
+            {
+                HeadersGate = headersGate.Task,
+            };
+
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            await WaitUntil(() => client.BeforeSendRequestCount == 1);
+            HttpRequest captured;
+            lock (client.Requests) captured = Assert.Single(client.Requests);
+
+            for (int i = 0; i < 3; i++)
+            {
+                await Task.Delay(100);
+                captured.OnHeaderReceived?.Invoke();
+                lock (errors) Assert.Empty(errors);
+                Assert.False(conn.Completion.IsCompleted);
+            }
+
+            var completed = await Task.WhenAny(conn.Completion, Task.Delay(2000));
+            Assert.Same(conn.Completion, completed);
+            await conn.Completion;
             lock (errors) Assert.IsType<TimeoutException>(Assert.Single(errors));
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+        }
+
+        [Fact]
+        public async Task IdleTimeout_FiresAfterAcceptedHeadersWhenBodyIsSilent()
+        {
+            var errors = new List<Exception>();
+            var states = new List<SseConnectionState>();
+            var options = ZeroDelay();
+            options.IdleTimeout = TimeSpan.FromMilliseconds(20);
+            options.ShouldReconnect = _ => false;
+            var client = new ControllableHttpClient(_ => Behavior.Block())
+            {
+                InvokeInternalTransportCallbacks = false,
+            };
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); },
+                onStateChanged: (_, next) => { lock (states) states.Add(next); });
+
+            var completed = await Task.WhenAny(conn.Completion, Task.Delay(2000));
+
+            Assert.Same(conn.Completion, completed);
+            await conn.Completion;
+            TimeoutException timeout;
+            lock (errors) timeout = Assert.IsType<TimeoutException>(Assert.Single(errors));
+            Assert.Equal("SSE idle/heartbeat timeout", timeout.Message);
             lock (states) Assert.Contains(SseConnectionState.Open, states);
         }
 

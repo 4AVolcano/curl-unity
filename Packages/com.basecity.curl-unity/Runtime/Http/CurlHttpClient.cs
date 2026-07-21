@@ -671,6 +671,8 @@ namespace CurlUnity.Http
 
             // Streaming
             curlReq.DataCallback = request.OnDataReceived;
+            curlReq.BeforeSendRequestCallback = request.OnBeforeSendRequest;
+            curlReq.HeaderReceivedCallback = request.OnHeaderReceived;
         }
 
         private void EnsureCookieJar()

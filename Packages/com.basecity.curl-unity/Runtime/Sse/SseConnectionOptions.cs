@@ -83,9 +83,13 @@ namespace CurlUnity.Sse
         // ——————————————————————— 心跳 / 空闲 ———————————————————————
 
         /// <summary>
-        /// 空闲/心跳超时：连接进入 <see cref="SseConnectionState.Open"/> 后，超过此时长未收到任何字节
-        /// （含注释心跳）则判定连接僵死并重连。建连阶段不启用本计时，由
-        /// <see cref="Http.HttpRequest.ConnectTimeoutMs"/> 单独控制。
+        /// 空闲/心跳超时：DNS、连接及协议协商完成、HTTP 请求即将发送时开始计时；之后每次收到
+        /// 响应头数据或响应体字节（含 SSE 注释心跳）都会续期。超过此时长没有任何入站响应活动，
+        /// 无论仍在等待响应头还是已经进入 <see cref="SseConnectionState.Open"/>，都会判定本轮连接
+        /// 僵死并重连。请求发送前的连接阶段由 <see cref="Http.HttpRequest.ConnectTimeoutMs"/> 控制。
+        /// 对带请求体的 SSE，请求体上传进度不会续期；较大或较慢的上传应相应调大本值。
+        /// 使用不支持 CurlUnity 内部传输事件的自定义 <see cref="Http.IHttpClient"/> 时，计时会兼容性地
+        /// 延后到最终响应头被接受时启动；完整的响应头前覆盖由内置 <see cref="Http.CurlHttpClient"/> 提供。
         /// <c>null</c>（默认）= 不启用；设置时必须为正。
         /// </summary>
         public TimeSpan? IdleTimeout { get; set; }

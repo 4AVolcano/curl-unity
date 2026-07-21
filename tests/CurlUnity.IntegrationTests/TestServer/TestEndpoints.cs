@@ -282,6 +282,17 @@ namespace CurlUnity.IntegrationTests.TestServer
                 await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
             });
 
+            // SSE delayed headers: 请求已被 Kestrel 接收，但在 silentMs 内完全不提交响应头。
+            // 用于覆盖 TCP/TLS 已就绪、请求已发出、服务端迟迟不返回首段响应的窗口。
+            app.MapGet("/sse-delayed-headers", async (HttpContext ctx) =>
+            {
+                int silentMs = int.TryParse((string)ctx.Request.Query["silentMs"], out var s) ? s : 2000;
+                await Task.Delay(silentMs, ctx.RequestAborted);
+                ctx.Response.ContentType = "text/event-stream";
+                await ctx.Response.WriteAsync("data: after-delayed-headers\n\n", ctx.RequestAborted);
+                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+            });
+
             // SSE 非 2xx：用于测错误重连。
             app.MapGet("/sse-503", () => Results.StatusCode(503));
         }

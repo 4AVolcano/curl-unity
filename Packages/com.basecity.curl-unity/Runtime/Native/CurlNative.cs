@@ -140,9 +140,22 @@ namespace CurlUnity.Native
         // CURLcode
         public const int CURLE_OK = 0;
 
+        // curl_prereq_callback return values
+        public const int CURL_PREREQFUNC_OK = 0;
+        public const int CURL_PREREQFUNC_ABORT = 1;
+
         // Write callback: size_t (*)(char *ptr, size_t size, size_t nmemb, void *userdata)
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate UIntPtr WriteCallback(IntPtr ptr, UIntPtr size, UIntPtr nmemb, IntPtr userdata);
+
+        // curl_prereq_callback: runs after connection/protocol setup and immediately before the request is sent.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int PrereqCallback(
+            IntPtr userdata,
+            IntPtr connPrimaryIp,
+            IntPtr connLocalIp,
+            int connPrimaryPort,
+            int connLocalPort);
 
         // curl_lock_function: void (*)(CURL *handle, curl_lock_data data, curl_lock_access access, void *userptr)
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -237,6 +250,12 @@ namespace CurlUnity.Native
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern int curl_unity_setopt_read_data(IntPtr handle, IntPtr userdata);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_unity_setopt_prereq_function(IntPtr handle, PrereqCallback callback);
+
+        [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int curl_unity_setopt_prereq_data(IntPtr handle, IntPtr userdata);
 
         [DllImport(LIB, CallingConvention = CallingConvention.Cdecl)]
         public static extern int curl_unity_getinfo_long(IntPtr handle, int info, out long value);

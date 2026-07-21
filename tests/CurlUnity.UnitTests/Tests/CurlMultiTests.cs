@@ -593,6 +593,46 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task InternalTransportCallbacks_FireBeforeSendAndForEachHeaderLine()
+        {
+            var api = new FakeCurlApi();
+            var observed = new List<string>();
+            var droveResponse = false;
+            api.OnMultiPerform = multiHandle =>
+            {
+                var handle = api.GetFirstActiveHandle(multiHandle);
+                if (handle == IntPtr.Zero || droveResponse)
+                    return;
+
+                droveResponse = true;
+                Assert.Equal(CurlNative.CURL_PREREQFUNC_OK, api.InvokePrereqCallback(handle));
+                api.GetEasyHandleState(handle).ResponseCode = 200;
+                api.InvokeHeaderCallback(handle, Ascii("HTTP/1.1 200 OK\r\n"));
+                api.InvokeHeaderCallback(handle, Ascii("Content-Type: text/event-stream\r\n"));
+                api.InvokeHeaderCallback(handle, Ascii("\r\n"));
+                api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+            };
+
+            using var client = new CurlHttpClient(api);
+            using var response = await client.SendAsync(new HttpRequest
+            {
+                Url = "http://example.invalid/",
+                OnBeforeSendRequest = () => observed.Add("before-send"),
+                OnHeaderReceived = () => observed.Add("header"),
+                OnHeadersReceived = _ => observed.Add("headers-complete"),
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(new[]
+            {
+                "before-send",
+                "header",
+                "header",
+                "header",
+                "headers-complete",
+            }, observed);
+        }
+
+        [Fact]
         public void OnHeaderData_Trailers_DoNotFireHeadersReceivedAgain()
         {
             var api = new FakeCurlApi();

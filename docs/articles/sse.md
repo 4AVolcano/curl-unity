@@ -44,7 +44,7 @@ using var resp = await client.ReadServerSentEventsAsync(req, evt =>
 var options = new SseConnectionOptions
 {
     ReconnectDelayInit = TimeSpan.FromSeconds(1),  // 退避基准（首连后用作下次重连起点，建立成功后重置回此值）
-    IdleTimeout = TimeSpan.FromSeconds(20),         // 进入 Open 后 20s 无数据(含注释心跳)→ 判死重连；null=不启用
+    IdleTimeout = TimeSpan.FromSeconds(20),         // 请求即将发送后 20s 无入站响应活动→ 判死重连；null=不启用
 };
 
 var req = new HttpRequest { Url = url };
@@ -84,7 +84,14 @@ using var sse = client.OpenSse(async ct =>
 
 `Open` 表示本轮已收到并接受最终响应头：状态码是非 204 的 2xx。状态在响应头完整结束时转换，**不等待第一块 body 数据**；因此服务端只 flush 响应头、暂时不发送事件或心跳时，连接也会进入 `Open`。非 2xx 不会进入 `Open`，204 则直接关闭。
 
-`Open` 不表示已经收到 body，也不表示已满足下节的退避重置条件。`IdleTimeout` 严格只检测进入 `Open` 后的 I/O 静默：建连阶段不启动，由 `HttpRequest.ConnectTimeoutMs` 单独控制；接受响应头进入 `Open` 时首次启动，之后每块 body 数据（包括注释心跳）都会再次刷新。因而静默流进入 `Open` 后，如果持续没有 body 数据或心跳，会在从接受响应头起经过 `IdleTimeout` 后判定超时并重连。
+`Open` 不表示已经收到 body，也不表示已满足下节的退避重置条件。超时边界分为两个连续阶段：
+
+1. `HttpRequest.ConnectTimeoutMs` 覆盖 DNS、连接和协议协商，直到连接可用于发送本轮 HTTP 请求；
+2. `IdleTimeout` 从请求即将发送时开始，覆盖等待首段/完整响应头以及进入 `Open` 后的响应静默。每段响应头数据、每块 body 数据（包括注释心跳）都会续期。
+
+因此，服务端已经接受连接和请求、但迟迟不返回响应头时，也会由 `IdleTimeout` 判定超时并重连；此时状态仍是 `Connecting`。最终响应头被接受后状态进入 `Open`，若随后持续没有事件或心跳，则沿用同一个空闲计时机制。`IdleTimeout` 只观察入站响应活动，不会因请求体上传进度续期；使用较大或较慢的 SSE POST body 时应留出足够时长。
+
+上述响应头前覆盖由内置 `CurlHttpClient` 提供。自定义 `IHttpClient` 无法触发 CurlUnity 的内部传输事件时，会兼容性地在最终响应头被接受时才启动 `IdleTimeout`，其连接后、响应头前的等待应由自定义实现自行设置上限。
 
 ### 退避与重置语义
 

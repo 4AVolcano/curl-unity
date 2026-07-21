@@ -189,6 +189,36 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         [Fact]
+        public async Task OpenSse_IdleTimeout_CoversWaitForResponseHeaders()
+        {
+            var errors = new List<Exception>();
+            var states = new List<SseConnectionState>();
+            var options = new SseConnectionOptions
+            {
+                IdleTimeout = TimeSpan.FromMilliseconds(200),
+                ReconnectDelayInit = TimeSpan.Zero,
+                ShouldReconnect = _ => false,
+            };
+            using var sse = _client.OpenSse(
+                new HttpRequest
+                {
+                    Url = $"{_server.HttpUrl}/sse-delayed-headers?silentMs=3000",
+                    TimeoutMs = 0,
+                },
+                onEvent: _ => { },
+                onError: e => { lock (errors) errors.Add(e); },
+                onStateChanged: (_, next) => { lock (states) states.Add(next); },
+                options: options);
+
+            await WithTimeout(sse.Completion, 5000);
+
+            TimeoutException timeout;
+            lock (errors) timeout = Assert.IsType<TimeoutException>(Assert.Single(errors));
+            Assert.Contains("before accepted headers", timeout.Message);
+            lock (states) Assert.DoesNotContain(SseConnectionState.Open, states);
+        }
+
+        [Fact]
         public async Task OpenSse_NonSuccess_RaisesError_AndFactoryReinvoked()
         {
             var errors = new List<Exception>();
