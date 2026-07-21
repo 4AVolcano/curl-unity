@@ -174,7 +174,9 @@ namespace CurlUnity.Sse
                         var idle = _options.IdleTimeout ?? TimeSpan.Zero;
                         if (idle > TimeSpan.Zero)
                         {
-                            idleCts = new CancellationTokenSource(idle);
+                            // 建连阶段仅由 HttpRequest.ConnectTimeoutMs 控制；收到成功响应头进入 Open 后，
+                            // 才由 OnAcceptedHeaders 启动空闲/心跳计时。
+                            idleCts = new CancellationTokenSource();
                             linked = CancellationTokenSource.CreateLinkedTokenSource(_linkedCt.Token, idleCts.Token);
                             sendTok = linked.Token;
                         }
@@ -224,9 +226,10 @@ namespace CurlUnity.Sse
                             : "callback-fault";
                         break; // 用户 Dispose / 取消（或回调异常触发的取消）→ 退出
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException ex) when (
+                        idleCts?.IsCancellationRequested == true && !_linkedCt.IsCancellationRequested)
                     {
-                        lastError = new TimeoutException("SSE idle/heartbeat timeout"); // 空闲超时 → 重连
+                        lastError = new TimeoutException("SSE idle/heartbeat timeout", ex); // 空闲超时 → 重连
                         RaiseError(lastError);
                     }
                     catch (Exception ex)

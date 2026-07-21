@@ -44,7 +44,7 @@ using var resp = await client.ReadServerSentEventsAsync(req, evt =>
 var options = new SseConnectionOptions
 {
     ReconnectDelayInit = TimeSpan.FromSeconds(1),  // 退避基准（首连后用作下次重连起点，建立成功后重置回此值）
-    IdleTimeout = TimeSpan.FromSeconds(20),         // 20s 无任何数据(含注释心跳)→ 判死重连；null=不启用
+    IdleTimeout = TimeSpan.FromSeconds(20),         // 进入 Open 后 20s 无数据(含注释心跳)→ 判死重连；null=不启用
 };
 
 var req = new HttpRequest { Url = url };
@@ -84,7 +84,7 @@ using var sse = client.OpenSse(async ct =>
 
 `Open` 表示本轮已收到并接受最终响应头：状态码是非 204 的 2xx。状态在响应头完整结束时转换，**不等待第一块 body 数据**；因此服务端只 flush 响应头、暂时不发送事件或心跳时，连接也会进入 `Open`。非 2xx 不会进入 `Open`，204 则直接关闭。
 
-`Open` 不表示已经收到 body，也不表示已满足下节的退避重置条件。`IdleTimeout` 仍是 I/O 静默计时：计时器在请求开始前启用，接受响应头时刷新，之后每块 body 数据（包括注释心跳）都会再次刷新。因而静默流进入 `Open` 后，如果持续没有 body 数据或心跳，会在从接受响应头起经过 `IdleTimeout` 后判定超时并重连。
+`Open` 不表示已经收到 body，也不表示已满足下节的退避重置条件。`IdleTimeout` 严格只检测进入 `Open` 后的 I/O 静默：建连阶段不启动，由 `HttpRequest.ConnectTimeoutMs` 单独控制；接受响应头进入 `Open` 时首次启动，之后每块 body 数据（包括注释心跳）都会再次刷新。因而静默流进入 `Open` 后，如果持续没有 body 数据或心跳，会在从接受响应头起经过 `IdleTimeout` 后判定超时并重连。
 
 ### 退避与重置语义
 

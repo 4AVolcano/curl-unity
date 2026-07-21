@@ -83,7 +83,9 @@ namespace CurlUnity.Sse
         // ——————————————————————— 心跳 / 空闲 ———————————————————————
 
         /// <summary>
-        /// 空闲/心跳超时：超过此时长未收到任何字节（含注释心跳）则判定连接僵死并重连。
+        /// 空闲/心跳超时：连接进入 <see cref="SseConnectionState.Open"/> 后，超过此时长未收到任何字节
+        /// （含注释心跳）则判定连接僵死并重连。建连阶段不启用本计时，由
+        /// <see cref="Http.HttpRequest.ConnectTimeoutMs"/> 单独控制。
         /// <c>null</c>（默认）= 不启用；设置时必须为正。
         /// </summary>
         public TimeSpan? IdleTimeout { get; set; }

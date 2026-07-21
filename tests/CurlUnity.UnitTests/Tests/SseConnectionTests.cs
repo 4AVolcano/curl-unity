@@ -223,6 +223,79 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task IdleTimeout_DoesNotRunBeforeAcceptedHeaders()
+        {
+            var attemptStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var headersGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var errors = new List<Exception>();
+            var options = ZeroDelay();
+            options.IdleTimeout = TimeSpan.FromMilliseconds(20);
+            var client = new ControllableHttpClient(_ => Behavior.Block())
+            {
+                HeadersGate = headersGate.Task,
+            };
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+            {
+                attemptStarted.TrySetResult(true);
+                return Task.FromResult(new HttpRequest { Url = "http://x" });
+            }
+
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            await attemptStarted.Task;
+            await Task.Delay(200);
+
+            lock (errors) Assert.Empty(errors);
+            Assert.Equal(SseConnectionState.Connecting, conn.State);
+
+            conn.Dispose();
+            await conn.Completion;
+        }
+
+        [Fact]
+        public async Task IdleTimeout_FiresAfterAcceptedHeadersWhenBodyIsSilent()
+        {
+            var errors = new List<Exception>();
+            var states = new List<SseConnectionState>();
+            var options = ZeroDelay();
+            options.IdleTimeout = TimeSpan.FromMilliseconds(20);
+            options.ShouldReconnect = _ => false;
+            var client = new ControllableHttpClient(_ => Behavior.Block());
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); },
+                onStateChanged: (_, next) => { lock (states) states.Add(next); });
+
+            var completed = await Task.WhenAny(conn.Completion, Task.Delay(2000));
+
+            Assert.Same(conn.Completion, completed);
+            await conn.Completion;
+            lock (errors) Assert.IsType<TimeoutException>(Assert.Single(errors));
+            lock (states) Assert.Contains(SseConnectionState.Open, states);
+        }
+
+        [Fact]
+        public async Task OperationCanceledException_NotCausedByIdleTimeout_IsPreserved()
+        {
+            var original = new OperationCanceledException("request factory cancelled independently");
+            var errors = new List<Exception>();
+            var options = ZeroDelay();
+            options.ShouldReconnect = _ => false;
+
+            Task<HttpRequest> CreateRequest(CancellationToken _)
+                => Task.FromException<HttpRequest>(original);
+
+            using var client = new ControllableHttpClient(_ => Behavior.Block());
+            using var conn = new SseConnection(client, CreateRequest, options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            await conn.Completion;
+
+            lock (errors) Assert.Same(original, Assert.Single(errors));
+        }
+
+        [Fact]
         public async Task InjectsLastEventId_OnReconnect()
         {
             var client = new ControllableHttpClient(idx =>
