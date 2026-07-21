@@ -175,8 +175,9 @@ namespace CurlUnity.Sse
                         var idle = _options.IdleTimeout ?? TimeSpan.Zero;
                         if (idle > TimeSpan.Zero)
                         {
-                            // CTS 先创建但不启动：连接/协议协商阶段仅由 ConnectTimeoutMs 控制。
-                            // OnBeforeSendRequest 在请求即将发出时首次启动，覆盖等待首段响应头的静默窗口。
+                            // CTS 先创建但不启动：首跳连接/协议协商阶段仅由 ConnectTimeoutMs 控制。
+                            // OnBeforeSendRequest 在首个请求即将发出时启动；之后保持覆盖整个逻辑请求，
+                            // 包括 libcurl 自动跟随重定向时对中间响应体的内部读取与后续跳转。
                             idleCts = new CancellationTokenSource();
                             linked = CancellationTokenSource.CreateLinkedTokenSource(_linkedCt.Token, idleCts.Token);
                             sendTok = linked.Token;

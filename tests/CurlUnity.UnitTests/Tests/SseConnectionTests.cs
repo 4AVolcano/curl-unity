@@ -325,6 +325,39 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task IdleTimeout_RemainsArmedWhileWaitingForNextRedirectHop()
+        {
+            var headersGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var errors = new List<Exception>();
+            var options = ZeroDelay();
+            options.IdleTimeout = TimeSpan.FromMilliseconds(100);
+            options.ShouldReconnect = _ => false;
+            var client = new ControllableHttpClient(_ => Behavior.Block())
+            {
+                HeadersGate = headersGate.Task,
+            };
+
+            using var conn = new SseConnection(client, Factory(), options, CancellationToken.None,
+                onError: e => { lock (errors) errors.Add(e); });
+
+            await WaitUntil(() => client.BeforeSendRequestCount == 1);
+            HttpRequest captured;
+            lock (client.Requests) captured = Assert.Single(client.Requests);
+
+            // 模拟一个已跟随的 3xx header block。下一跳 PREREQ 尚未触发时，idle 仍须
+            // 保持运行：libcurl 此时可能正在吞读中间响应体，也可能已开始下一跳连接。
+            captured.OnHeaderReceived?.Invoke();
+
+            var completed = await Task.WhenAny(conn.Completion, Task.Delay(2000));
+            Assert.Same(conn.Completion, completed);
+            await conn.Completion;
+            TimeoutException timeout;
+            lock (errors) timeout = Assert.IsType<TimeoutException>(Assert.Single(errors));
+            Assert.Contains("before accepted headers", timeout.Message);
+            Assert.Equal(SseConnectionState.Closed, conn.State);
+        }
+
+        [Fact]
         public async Task IdleTimeout_FiresAfterAcceptedHeadersWhenBodyIsSilent()
         {
             var errors = new List<Exception>();
