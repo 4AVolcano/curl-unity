@@ -131,10 +131,13 @@ jobs:
       - name: Verify build (symbol check)
         run: |
           echo "Bridge symbols:"
-          nm -gU output/iOS/libcurl_unity.a | grep ' T .*curl_unity_' | sort -u
-          count=$(nm -gU output/iOS/libcurl_unity.a | grep -c ' T .*curl_unity_')
+          nm -gU output/iOS/libcurl_unity.a > bridge-symbols.txt
+          grep ' T .*curl_unity_' bridge-symbols.txt | sort -u
+          count=$(grep -c ' T .*curl_unity_' bridge-symbols.txt)
           echo "Found $count bridge symbols"
           [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
+          grep -q ' T .*curl_unity_setopt_prereq_function' bridge-symbols.txt
+          grep -q ' T .*curl_unity_setopt_prereq_data' bridge-symbols.txt
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -195,10 +198,13 @@ jobs:
       - name: Verify build (symbol check)
         run: |
           echo "Bridge symbols:"
-          nm -gD output/Android/${{ matrix.output }}/libcurl_unity.so | grep ' T .*curl_unity_'
-          count=$(nm -gD output/Android/${{ matrix.output }}/libcurl_unity.so | grep -c ' T .*curl_unity_')
+          nm -gD output/Android/${{ matrix.output }}/libcurl_unity.so > bridge-symbols.txt
+          grep ' T .*curl_unity_' bridge-symbols.txt
+          count=$(grep -c ' T .*curl_unity_' bridge-symbols.txt)
           echo "Found $count bridge symbols"
           [ "$count" -ge 10 ] || { echo "FAIL: expected at least 10 bridge symbols"; exit 1; }
+          grep -q ' T .*curl_unity_setopt_prereq_function' bridge-symbols.txt
+          grep -q ' T .*curl_unity_setopt_prereq_data' bridge-symbols.txt
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
