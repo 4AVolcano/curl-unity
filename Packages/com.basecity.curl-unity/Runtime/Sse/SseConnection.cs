@@ -140,6 +140,7 @@ namespace CurlUnity.Sse
                 {
                     bool terminal = false;    // 204：服务端要求停止
                     bool hadByte = false;     // 本轮是否收到过任意 SSE body 字节
+                    bool acceptedHeaders = false; // 本轮是否已接受非 204 的 2xx 最终响应头
                     Stopwatch upSw = null;    // 自首字节起的存活计时（判断是否达 BackoffResetThreshold）
                     lastError = null;
 
@@ -174,19 +175,31 @@ namespace CurlUnity.Sse
                         var idle = _options.IdleTimeout ?? TimeSpan.Zero;
                         if (idle > TimeSpan.Zero)
                         {
-                            idleCts = new CancellationTokenSource(idle);
+                            // CTS 先创建但不启动：首跳连接/协议协商阶段仅由 ConnectTimeoutMs 控制。
+                            // OnBeforeSendRequest 在首个请求即将发出时启动；之后保持覆盖整个逻辑请求，
+                            // 包括 libcurl 自动跟随重定向时对中间响应体的内部读取与后续跳转。
+                            idleCts = new CancellationTokenSource();
                             linked = CancellationTokenSource.CreateLinkedTokenSource(_linkedCt.Token, idleCts.Token);
                             sendTok = linked.Token;
                         }
 
-                        // OnByte 在 worker 线程随每块字节触发。捕获本轮局部 idleCts（不再用共享字段）：
-                        // 连接结束后不会再有回调，finally 里 Dispose(idleCts) 与之无并发；ODE 仅为防御性兜底。
-                        void OnByte()
+                        void RefreshIdleTimeout()
                         {
                             if (idle > TimeSpan.Zero)
                             {
                                 try { idleCts.CancelAfter(idle); } catch (ObjectDisposedException) { }
                             }
+                        }
+
+                        void OnBeforeSendRequest() => RefreshIdleTimeout();
+
+                        void OnHeaderReceived() => RefreshIdleTimeout();
+
+                        // OnByte 在 worker 线程随每块字节触发。捕获本轮局部 idleCts（不再用共享字段）：
+                        // 连接结束后不会再有回调，finally 里 Dispose(idleCts) 与之无并发；ODE 仅为防御性兜底。
+                        void OnByte()
+                        {
+                            RefreshIdleTimeout();
                             if (!hadByte)
                             {
                                 hadByte = true;
@@ -196,17 +209,18 @@ namespace CurlUnity.Sse
 
                         void OnAcceptedHeaders()
                         {
-                            if (idle > TimeSpan.Zero)
-                            {
-                                try { idleCts.CancelAfter(idle); } catch (ObjectDisposedException) { }
-                            }
+                            acceptedHeaders = true;
+                            // 也是不支持内部传输 hook 的自定义 IHttpClient 的兼容回退。
+                            RefreshIdleTimeout();
                             SetState(SseConnectionState.Open);
                         }
 
                         var lastEventId = _options.AutoInjectLastEventId ? _parser.LastEventId : null;
                         using var resp = await SseCoreExtensions.RunOneConnectionAsync(
                             _client, request, _parser, RaiseEvent, OnByte, OnAcceptedHeaders, sendTok,
-                            lastEventId, _commentLogger)
+                            lastEventId, _commentLogger,
+                            onBeforeSendRequest: OnBeforeSendRequest,
+                            onHeaderReceived: OnHeaderReceived)
                             .ConfigureAwait(false);
 
                         // 非 2xx 已由 RunOneConnectionAsync 的 OnHeadersReceived 抛 SseHttpStatusException
@@ -224,9 +238,14 @@ namespace CurlUnity.Sse
                             : "callback-fault";
                         break; // 用户 Dispose / 取消（或回调异常触发的取消）→ 退出
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException ex) when (
+                        idleCts?.IsCancellationRequested == true && !_linkedCt.IsCancellationRequested)
                     {
-                        lastError = new TimeoutException("SSE idle/heartbeat timeout"); // 空闲超时 → 重连
+                        lastError = new TimeoutException(
+                            acceptedHeaders
+                                ? "SSE idle/heartbeat timeout"
+                                : "SSE response idle timeout before accepted headers",
+                            ex); // 请求发出后响应静默 / Open 后心跳静默 → 重连
                         RaiseError(lastError);
                     }
                     catch (Exception ex)

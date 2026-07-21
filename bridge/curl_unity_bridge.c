@@ -84,6 +84,16 @@ BRIDGE_API int curl_unity_setopt_read_data(CURL *handle, void *userdata)
     return (int)curl_easy_setopt(handle, CURLOPT_READDATA, userdata);
 }
 
+BRIDGE_API int curl_unity_setopt_prereq_function(CURL *handle, curl_prereq_callback callback)
+{
+    return (int)curl_easy_setopt(handle, CURLOPT_PREREQFUNCTION, callback);
+}
+
+BRIDGE_API int curl_unity_setopt_prereq_data(CURL *handle, void *userdata)
+{
+    return (int)curl_easy_setopt(handle, CURLOPT_PREREQDATA, userdata);
+}
+
 /* ================================================================
  * curl_easy_getinfo wrappers
  * ================================================================ */

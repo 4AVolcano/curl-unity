@@ -164,6 +164,18 @@ namespace CurlUnity.UnitTests.TestSupport
             return CurlNative.CURLE_OK;
         }
 
+        public int SetOptPrereqFunction(IntPtr handle, CurlNative.PrereqCallback callback)
+        {
+            _easyHandles[handle].PrereqCallback = callback;
+            return CurlNative.CURLE_OK;
+        }
+
+        public int SetOptPrereqData(IntPtr handle, IntPtr userdata)
+        {
+            _easyHandles[handle].PrereqData = userdata;
+            return CurlNative.CURLE_OK;
+        }
+
         public int GetInfoLong(IntPtr handle, int info, out long value)
         {
             if (info == CurlNative.CURLINFO_RESPONSE_CODE)
@@ -498,6 +510,24 @@ namespace CurlUnity.UnitTests.TestSupport
             }
         }
 
+        public int InvokePrereqCallback(IntPtr easyHandle)
+        {
+            var state = _easyHandles[easyHandle];
+            if (state.PrereqCallback == null)
+                throw new InvalidOperationException("Prereq callback has not been registered.");
+
+            try
+            {
+                CallbackInProgress = true;
+                return state.PrereqCallback(
+                    state.PrereqData, IntPtr.Zero, IntPtr.Zero, 0, 0);
+            }
+            finally
+            {
+                CallbackInProgress = false;
+            }
+        }
+
         public sealed class FakeEasyHandleState
         {
             public readonly Dictionary<int, string> StringOptions = new();
@@ -514,6 +544,8 @@ namespace CurlUnity.UnitTests.TestSupport
             public IntPtr HeaderData;
             public CurlNative.WriteCallback ReadCallback;
             public IntPtr ReadData;
+            public CurlNative.PrereqCallback PrereqCallback;
+            public IntPtr PrereqData;
             public long ResponseCode;
             public bool IsCleanedUp;
         }

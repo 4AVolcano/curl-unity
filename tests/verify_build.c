@@ -23,12 +23,15 @@
 /* Bridge function declarations */
 extern int curl_unity_setopt_long(CURL *handle, int option, int64_t value);
 extern int curl_unity_setopt_string(CURL *handle, int option, const char *value);
+extern int curl_unity_setopt_prereq_function(CURL *handle, curl_prereq_callback callback);
+extern int curl_unity_setopt_prereq_data(CURL *handle, void *userdata);
 extern int curl_unity_getinfo_long(CURL *handle, int info, int64_t *value);
 extern int curl_unity_getinfo_string(CURL *handle, int info, const char **value);
 extern int curl_unity_multi_info_read(CURLM *multi, CURL **easy_out, int *result_out);
 extern int curl_unity_multi_setopt_long(CURLM *multi, int option, int64_t value);
 
 static int failures = 0;
+static int prereq_marker = 0;
 
 #define CHECK(cond, fmt, ...) do { \
     if (!(cond)) { \
@@ -36,6 +39,19 @@ static int failures = 0;
         failures++; \
     } \
 } while(0)
+
+static int prereq_callback(void *clientp,
+                           char *conn_primary_ip,
+                           char *conn_local_ip,
+                           int conn_primary_port,
+                           int conn_local_port) {
+    (void)conn_primary_ip;
+    (void)conn_local_ip;
+    (void)conn_primary_port;
+    (void)conn_local_port;
+    prereq_marker = *(int *)clientp;
+    return CURL_PREREQFUNC_OK;
+}
 
 static void test_version(void) {
     printf("[version]\n");
@@ -64,6 +80,14 @@ static void test_easy_handle(void) {
     /* bridge: setopt_string — CURLOPT_URL = 10002 */
     rc = curl_unity_setopt_string(easy, 10002, "https://example.com");
     CHECK(rc == CURLE_OK, "setopt_string(URL) rc=%d", rc);
+
+    /* bridge: typed CURLOPT_PREREQFUNCTION / CURLOPT_PREREQDATA wrappers */
+    int marker = 42;
+    rc = curl_unity_setopt_prereq_function(easy, prereq_callback);
+    CHECK(rc == CURLE_OK, "setopt_prereq_function rc=%d", rc);
+    rc = curl_unity_setopt_prereq_data(easy, &marker);
+    CHECK(rc == CURLE_OK, "setopt_prereq_data rc=%d", rc);
+    CHECK(prereq_marker == 0, "prereq callback must not run during setopt");
 
     /* bridge: getinfo_long — CURLINFO_RESPONSE_CODE = 0x200002 */
     int64_t code = -1;

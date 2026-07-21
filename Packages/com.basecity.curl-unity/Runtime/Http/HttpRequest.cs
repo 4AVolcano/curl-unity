@@ -180,6 +180,18 @@ namespace CurlUnity.Http
         public Action<IHttpResponse> OnHeadersReceived { get; set; }
 
         /// <summary>
+        /// 连接及协议协商完成、请求即将发送时触发。内部传输事件，不对外暴露。
+        /// 同一个逻辑请求在重定向等场景下可能触发多次。
+        /// </summary>
+        internal Action OnBeforeSendRequest { get; set; }
+
+        /// <summary>
+        /// 每次收到一段响应头数据时触发。内部传输事件，不对外暴露；可能对应状态行、
+        /// 普通 header 行或 header block 的空白结束行，并且可能触发多次。
+        /// </summary>
+        internal Action OnHeaderReceived { get; set; }
+
+        /// <summary>
         /// 是否启用 TCP keep-alive（<c>CURLOPT_TCP_KEEPALIVE</c>）。内部字段，不对外暴露；
         /// 目前仅 SSE 单连接读取（<c>ReadServerSentEventsAsync</c>）内部为长连接默认置 true。
         /// </summary>

@@ -75,16 +75,21 @@ namespace CurlUnity.Sse
         /// </para>
         /// <paramref name="onByteReceived"/> 在每块字节到达时回调（上层做空闲/心跳计时，本层可传 null）。
         /// <paramref name="onAcceptedHeaders"/> 在收到非 204 的 2xx 响应头时回调。
+        /// <paramref name="onBeforeSendRequest"/> 在连接及协议协商完成、请求即将发送时回调；
+        /// <paramref name="onHeaderReceived"/> 在每段响应头数据到达时回调。
         /// </summary>
         internal static Task<IHttpResponse> RunOneConnectionAsync(
             IHttpClient client, HttpRequest request, SseEventParser parser,
             Action<SseEvent> onEvent, Action onByteReceived, Action onAcceptedHeaders, CancellationToken ct,
-            string lastEventId = null, Action<string> onComment = null)
+            string lastEventId = null, Action<string> onComment = null,
+            Action onBeforeSendRequest = null, Action onHeaderReceived = null)
         {
             var configurationError = GetRequestConfigurationError(request);
             if (configurationError != null) throw configurationError;
 
             var sseRequest = CloneForSse(request, lastEventId);
+            sseRequest.OnBeforeSendRequest = onBeforeSendRequest;
+            sseRequest.OnHeaderReceived = onHeaderReceived;
             sseRequest.OnHeadersReceived = resp =>
             {
                 if (resp.StatusCode < 200 || resp.StatusCode >= 300)
