@@ -126,6 +126,7 @@ namespace CurlUnity.Sse
                 Method = src.Method,
                 Url = src.Url,
                 Headers = BuildHeaders(src.Headers, lastEventId),
+                IPAddresses = src.IPAddresses,
                 Body = src.Body,
                 BodyStream = src.BodyStream,
                 BodyLength = src.BodyLength,

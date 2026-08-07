@@ -44,6 +44,7 @@ namespace CurlUnity.Native
         public const int CURLOPT_READDATA = 10009;
         public const int CURLOPT_VERBOSE = 41;
         public const int CURLOPT_DNS_CACHE_TIMEOUT = 92;
+        public const int CURLOPT_RESOLVE = 10203;
         public const int CURLOPT_FOLLOWLOCATION = 52;
         public const int CURLOPT_MAXREDIRS = 68;
         public const int CURLOPT_SUPPRESS_CONNECT_HEADERS = 265;
@@ -97,6 +98,7 @@ namespace CurlUnity.Native
         // TCP keep-alive（SSE 等长连接内部开启；普通请求不设，沿用 libcurl 默认 0=关）。
         // 不设 TCP_NODELAY：libcurl 默认即 1（Nagle 已关），无需处理。
         public const int CURLOPT_TCP_KEEPALIVE = 213;
+        public const int CURLOPT_MAXAGE_CONN = 288;
 
         // READFUNCTION sentinel return values
         // 对齐 curl.h 宏 #define CURL_READFUNC_ABORT 0x10000000 的 int 字面量语义。

@@ -100,6 +100,16 @@ namespace CurlUnity.UnitTests.TestSupport
             _sLists.Remove(list);
         }
 
+        public IReadOnlyList<string> GetSListValues(IntPtr list)
+        {
+            if (!_sLists.TryGetValue(list, out var values))
+                throw new InvalidOperationException(
+                    $"slist 0x{list.ToInt64():X} is not alive");
+            return values.ToArray();
+        }
+
+        public bool IsSListAlive(IntPtr list) => _sLists.ContainsKey(list);
+
         public int SetOptString(IntPtr handle, int option, string value)
         {
             _easyHandles[handle].StringOptions[option] = value;

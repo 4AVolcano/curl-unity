@@ -24,6 +24,15 @@ namespace CurlUnity.Http
         public IEnumerable<KeyValuePair<string, string>> Headers { get; set; }
 
         /// <summary>
+        /// 为 <see cref="Url"/> 的域名指定候选 IP 地址。元素必须是裸 IPv4/IPv6
+        /// 字符串，IPv6 不需要方括号。<c>null</c>（默认）表示本次请求不修改解析结果；
+        /// 空集合表示移除该域名和端口之前注入的映射并回退正常 DNS。
+        /// 映射写入所属 <see cref="CurlHttpClient"/> 的共享 DNS 缓存，超时时间由
+        /// <see cref="CurlHttpClient.DnsCacheTimeoutSeconds"/> 控制。
+        /// </summary>
+        public IEnumerable<string> IPAddresses { get; set; }
+
+        /// <summary>
         /// 请求体 raw bytes。与 <see cref="BodyStream"/> 互斥,同时设置会在 Send 时 throw。
         /// JSON / form-urlencoded / multipart 等常见 body 可用
         /// <see cref="HttpClientExtensions"/> 的便利方法构造。

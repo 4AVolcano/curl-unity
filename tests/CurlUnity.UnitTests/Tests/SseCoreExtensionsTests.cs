@@ -214,5 +214,21 @@ namespace CurlUnity.UnitTests.Tests
             var sent = Assert.IsType<HttpRequest>(client.Captured);
             Assert.True(sent.TcpKeepAlive);
         }
+
+        [Fact]
+        public async Task ReadServerSentEvents_PreservesIPAddresses()
+        {
+            using var client = new CapturingHttpClient();
+            var entries = new[] { "192.0.2.1" };
+            var req = new HttpRequest
+            {
+                Url = "https://example.invalid/events",
+                IPAddresses = entries,
+            };
+
+            await client.ReadServerSentEventsAsync(req, _ => { });
+
+            Assert.Same(entries, client.Captured.IPAddresses);
+        }
     }
 }
