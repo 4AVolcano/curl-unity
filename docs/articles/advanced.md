@@ -172,6 +172,42 @@ using var client = new CurlHttpClient
 修改该值不会立即清空 DNS 缓存，后续请求查找缓存时会按新的超时值判断已有条目是否过期。
 负缓存的实际时长和缓存条件由随包分发的 libcurl 版本决定。
 
+## 空闲连接复用期限
+
+可以限制连接池中空闲连接被后续请求复用的时间：
+
+```csharp
+using var client = new CurlHttpClient
+{
+    MaxIdleConnectionAgeSeconds = 60,
+};
+```
+
+超过 60 秒未被使用的连接不会再被复用；libcurl 会在后续请求检查连接池时关闭它，
+而不是在第 60 秒由后台定时器主动断开。`0` 表示禁用空闲时间限制。
+
+## 自定义 DNS 解析
+
+`HttpRequest.IPAddresses` 可以为请求 URL 的域名指定候选 IP：
+
+```csharp
+var req = new HttpRequest
+{
+    Url = "https://api.example.com/",
+    IPAddresses = new[]
+    {
+        "192.0.2.1",
+        "2001:db8::1",
+    },
+};
+using var response = await client.SendAsync(req);
+```
+
+IPv6 地址不需要方括号，host、port 和底层解析规则由库内部生成。映射使用
+`DnsCacheTimeoutSeconds` 作为缓存时间，并写入当前 `CurlHttpClient` 的共享 DNS 缓存，
+因此后续请求可能继续使用。`null` 表示本次请求不修改映射；空集合表示删除当前 URL
+域名和端口已有的映射并回退正常 DNS。
+
 ## 自动响应解压
 
 默认开启(`AutoDecompressResponse = true`),libcurl 发 `Accept-Encoding: gzip, deflate`,自动解压 `resp.Body`。对 JSON/HTML 下行流量降 3-5x。

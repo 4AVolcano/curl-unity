@@ -32,6 +32,26 @@ namespace CurlUnity.IntegrationTests.Tests
         }
 
         [Fact]
+        public async Task Get_CustomResolveAndMaxIdleAge_ReachesServer()
+        {
+            var port = new Uri(_server.HttpUrl).Port;
+            _client.MaxIdleConnectionAgeSeconds = 60;
+            var request = new HttpRequest
+            {
+                Url = $"http://curl-unity-resolve.invalid:{port}/hello",
+                IPAddresses = new[]
+                {
+                    "127.0.0.1",
+                },
+            };
+
+            using var resp = await _client.SendAsync(request);
+
+            Assert.Equal(200, resp.StatusCode);
+            Assert.Equal("Hello, World!", Encoding.UTF8.GetString(resp.Body));
+        }
+
+        [Fact]
         public async Task Get_StatusCode404_ReturnsCorrectCode()
         {
             using var resp = await _client.GetAsync($"{_server.HttpUrl}/status/404");

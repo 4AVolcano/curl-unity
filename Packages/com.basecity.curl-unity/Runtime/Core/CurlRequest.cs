@@ -43,6 +43,7 @@ namespace CurlUnity.Core
         internal Action HeaderReceivedCallback;
         internal bool CaptureHeaders;
         internal IntPtr HeaderSlist;
+        internal IntPtr ResolveSlist;
         internal GCHandle SelfHandle;
 
         // 流式上传: UploadStream 非 null 时 libcurl 通过 READFUNCTION 拉数据;
@@ -124,6 +125,12 @@ namespace CurlUnity.Core
                 HeaderSlist = IntPtr.Zero;
             }
 
+            if (ResolveSlist != IntPtr.Zero)
+            {
+                Api.SListFreeAll(ResolveSlist);
+                ResolveSlist = IntPtr.Zero;
+            }
+
             BodyBuffer.Dispose();
             HeaderBuffer?.Dispose();
         }
@@ -146,6 +153,12 @@ namespace CurlUnity.Core
             {
                 Api.SListFreeAll(HeaderSlist);
                 HeaderSlist = IntPtr.Zero;
+            }
+
+            if (ResolveSlist != IntPtr.Zero)
+            {
+                Api.SListFreeAll(ResolveSlist);
+                ResolveSlist = IntPtr.Zero;
             }
 
             if (!_handleTransferred && Handle != IntPtr.Zero)

@@ -196,6 +196,173 @@ namespace CurlUnity.UnitTests.Tests
         }
 
         [Fact]
+        public async Task SendAsync_MaxIdleConnectionAge_UsesCurrentClientValue()
+        {
+            var api = new FakeCurlApi();
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+            };
+            using var client = new CurlHttpClient(api);
+
+            async Task<long> SendAndReadMaxAgeAsync()
+            {
+                var responseTask = client.SendAsync(
+                    new HttpRequest { Url = "http://example.invalid/" });
+                var state = api.GetEasyHandleState(api.LastEasyHandle);
+                var maxAge = state.LongOptions[CurlNative.CURLOPT_MAXAGE_CONN];
+                using var response = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
+                return maxAge;
+            }
+
+            Assert.Equal(118, await SendAndReadMaxAgeAsync());
+
+            client.MaxIdleConnectionAgeSeconds = 60;
+            Assert.Equal(60, await SendAndReadMaxAgeAsync());
+
+            client.MaxIdleConnectionAgeSeconds = 0;
+            Assert.Equal(0, await SendAndReadMaxAgeAsync());
+        }
+
+        [Fact]
+        public void MaxIdleConnectionAgeSeconds_Negative_Throws()
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => client.MaxIdleConnectionAgeSeconds = -1);
+        }
+
+        [Fact]
+        public async Task SendAsync_IPAddresses_GeneratesResolveRuleAndKeepsSlistUntilCompletion()
+        {
+            var api = new FakeCurlApi();
+            IntPtr resolveSlist = IntPtr.Zero;
+            IntPtr headerSlist = IntPtr.Zero;
+            System.Collections.Generic.IReadOnlyList<string> resolveValues = null;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle == IntPtr.Zero)
+                    return;
+
+                var state = api.GetEasyHandleState(handle);
+                resolveSlist = state.PointerOptions[CurlNative.CURLOPT_RESOLVE];
+                headerSlist = state.PointerOptions[CurlNative.CURLOPT_HTTPHEADER];
+                resolveValues = api.GetSListValues(resolveSlist);
+                api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var response = await client.SendAsync(new HttpRequest
+            {
+                Url = "https://example.invalid/",
+                Headers = new[]
+                {
+                    new System.Collections.Generic.KeyValuePair<string, string>("X-Test", "1"),
+                },
+                IPAddresses = new[]
+                {
+                    "192.0.2.1",
+                    "2001:db8::1",
+                },
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(new[]
+            {
+                "+example.invalid:443:192.0.2.1,[2001:db8::1]",
+            }, resolveValues);
+            Assert.NotEqual(IntPtr.Zero, resolveSlist);
+            Assert.NotEqual(resolveSlist, headerSlist);
+            Assert.False(api.IsSListAlive(resolveSlist));
+            Assert.False(api.IsSListAlive(headerSlist));
+        }
+
+        [Fact]
+        public async Task SendAsync_EmptyIPAddresses_RemovesExistingMapping()
+        {
+            var api = new FakeCurlApi();
+            System.Collections.Generic.IReadOnlyList<string> resolveValues = null;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                {
+                    var state = api.GetEasyHandleState(handle);
+                    var resolveSlist = state.PointerOptions[CurlNative.CURLOPT_RESOLVE];
+                    resolveValues = api.GetSListValues(resolveSlist);
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+                }
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var response = await client.SendAsync(new HttpRequest
+            {
+                Url = "https://example.invalid/",
+                IPAddresses = Array.Empty<string>(),
+            }).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(new[] { "-example.invalid:443" }, resolveValues);
+        }
+
+        [Fact]
+        public async Task SendAsync_NullIPAddresses_DoesNotModifyDnsMapping()
+        {
+            var api = new FakeCurlApi();
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+            };
+            using var client = new CurlHttpClient(api);
+
+            var responseTask = client.SendAsync(new HttpRequest
+            {
+                Url = "https://example.invalid/",
+            });
+            var state = api.GetEasyHandleState(api.LastEasyHandle);
+            Assert.False(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_RESOLVE));
+            using var response = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        [Theory]
+        [InlineData("not-an-ip")]
+        [InlineData("[2001:db8::1]")]
+        public async Task SendAsync_InvalidIPAddress_FailsFast(string value)
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            var ex = await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(
+                new HttpRequest
+                {
+                    Url = "https://example.invalid/",
+                    IPAddresses = new[] { value },
+                }));
+
+            Assert.Contains("IPv6 请勿添加方括号", ex.Message);
+            Assert.True(api.GetEasyHandleState(api.LastEasyHandle).IsCleanedUp);
+        }
+
+        [Fact]
+        public async Task SendAsync_IPAddressesWithIpLiteralUrl_FailsFast()
+        {
+            var api = new FakeCurlApi();
+            using var client = new CurlHttpClient(api);
+
+            await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(
+                new HttpRequest
+                {
+                    Url = "https://192.0.2.10/",
+                    IPAddresses = new[] { "192.0.2.1" },
+                }));
+        }
+
+        [Fact]
         public async Task SendAsync_LowSpeedPair_SetsBothOptions()
         {
             var api = new FakeCurlApi();

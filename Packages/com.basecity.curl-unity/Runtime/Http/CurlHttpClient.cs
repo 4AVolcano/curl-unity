@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,6 +42,7 @@ namespace CurlUnity.Http
         private CurlCookieJar _cookieJar;  // lazy：首次用到 EnableCookies 时初始化
         private volatile HttpProxy _proxy; // null = 不走代理（默认）；引用赋值天然原子
         private int _dnsCacheTimeoutSeconds = 60;
+        private int _maxIdleConnectionAgeSeconds = 118;
         private int _disposedFlag;
 
         private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
@@ -67,6 +69,23 @@ namespace CurlUnity.Http
                     throw new ArgumentOutOfRangeException(nameof(value),
                         "DnsCacheTimeoutSeconds must be >= -1 (-1 = cache forever).");
                 Volatile.Write(ref _dnsCacheTimeoutSeconds, value);
+            }
+        }
+
+        /// <summary>
+        /// 连接池中连接允许被复用的最大空闲时间（秒），对应
+        /// <c>CURLOPT_MAXAGE_CONN</c>。对之后创建的请求生效。默认 118；
+        /// 0 = 禁用空闲时间限制。不会中断正在使用的连接。
+        /// </summary>
+        public int MaxIdleConnectionAgeSeconds
+        {
+            get => Volatile.Read(ref _maxIdleConnectionAgeSeconds);
+            set
+            {
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value),
+                        "MaxIdleConnectionAgeSeconds must be >= 0 (0 = no idle age limit).");
+                Volatile.Write(ref _maxIdleConnectionAgeSeconds, value);
             }
         }
 
@@ -419,6 +438,20 @@ namespace CurlUnity.Http
             // URL 是请求成立的前提；失败必须往外抛，不能偷偷走"URL 为空的 request"。
             CheckSetOpt("CURLOPT_URL", _api.SetOptString(h, CurlNative.CURLOPT_URL, request.Url));
 
+            // 自定义 IP 地址在这里转换为 libcurl 私有规则；原生层不复制 slist，必须由
+            // CurlRequest 持有到传输结束。
+            if (request.IPAddresses != null)
+            {
+                var resolveRule = CreateResolveRule(request);
+                curlReq.ResolveSlist = _api.SListAppend(IntPtr.Zero, resolveRule);
+                if (curlReq.ResolveSlist == IntPtr.Zero)
+                    throw new InvalidOperationException(
+                        "curl_slist_append returned null while building the DNS mapping");
+
+                CheckSetOpt("CURLOPT_RESOLVE",
+                    _api.SetOptPtr(h, CurlNative.CURLOPT_RESOLVE, curlReq.ResolveSlist));
+            }
+
             // Proxy：未设置时显式置空禁用 libcurl 读 HTTPS_PROXY/HTTP_PROXY 环境变量
             // （避免进程环境泄漏到网络配置）;设置后由 URL scheme 自动决定代理类型。
             // HTTP/3 无法经由 HTTP 代理,libcurl 会自动回退到 HTTP/2 over TCP。
@@ -451,6 +484,10 @@ namespace CurlUnity.Http
             CheckSetOpt("CURLOPT_DNS_CACHE_TIMEOUT",
                 _api.SetOptLong(h, CurlNative.CURLOPT_DNS_CACHE_TIMEOUT,
                     DnsCacheTimeoutSeconds));
+
+            CheckSetOpt("CURLOPT_MAXAGE_CONN",
+                _api.SetOptLong(h, CurlNative.CURLOPT_MAXAGE_CONN,
+                    MaxIdleConnectionAgeSeconds));
 
             // TCP keep-alive：SSE 等长连接内部开启（HttpRequest 内部字段，不对外暴露）。
             // 不处理 Nagle：libcurl 默认 TCP_NODELAY=1（Nagle 已关），无需设置。
@@ -673,6 +710,42 @@ namespace CurlUnity.Http
             curlReq.DataCallback = request.OnDataReceived;
             curlReq.BeforeSendRequestCallback = request.OnBeforeSendRequest;
             curlReq.HeaderReceivedCallback = request.OnHeaderReceived;
+        }
+
+        private static string CreateResolveRule(HttpRequest request)
+        {
+            if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri) ||
+                uri.HostNameType != UriHostNameType.Dns ||
+                string.IsNullOrEmpty(uri.IdnHost) || uri.Port <= 0)
+            {
+                throw new ArgumentException(
+                    "设置 IPAddresses 时，Url 必须包含域名和有效端口。", nameof(request.Url));
+            }
+
+            var addresses = new List<string>();
+            foreach (var value in request.IPAddresses)
+            {
+                var text = value?.Trim();
+                if (string.IsNullOrEmpty(text) ||
+                    text.IndexOf('[') >= 0 || text.IndexOf(']') >= 0 ||
+                    !IPAddress.TryParse(text, out var address))
+                {
+                    throw new ArgumentException(
+                        $"IPAddresses 包含无效 IP 地址：'{value ?? "<null>"}'。IPv6 请勿添加方括号。",
+                        nameof(request.IPAddresses));
+                }
+
+                var normalized = address.ToString();
+                addresses.Add(address.AddressFamily ==
+                    System.Net.Sockets.AddressFamily.InterNetworkV6
+                    ? $"[{normalized}]"
+                    : normalized);
+            }
+
+            if (addresses.Count == 0)
+                return $"-{uri.IdnHost}:{uri.Port}";
+
+            return $"+{uri.IdnHost}:{uri.Port}:{string.Join(",", addresses)}";
         }
 
         private void EnsureCookieJar()
