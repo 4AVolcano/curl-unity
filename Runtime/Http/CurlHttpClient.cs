@@ -1,0 +1,853 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Net;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using CurlUnity.Core;
+using CurlUnity.Diagnostics;
+using CurlUnity.Native;
+
+namespace CurlUnity.Http
+{
+    /// <summary>
+    /// libcurl 的 HTTP 客户端实现。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>代理行为：</b>默认不使用代理，且显式屏蔽 libcurl 对
+    /// <c>HTTPS_PROXY</c> / <c>HTTP_PROXY</c> 等环境变量的自动读取，避免
+    /// 开发/宿主机上的代理泄漏到业务网络。需要走代理时调用
+    /// <see cref="SetProxy"/> 显式激活；<see cref="ClearProxy"/> 恢复默认行为。
+    /// 注意 HTTP/3 无法经 HTTP 代理隧道化，启用代理后 libcurl 会回退到 HTTP/2。
+    /// </para>
+    /// <para>
+    /// <b>Cookie 行为：</b><see cref="HttpRequest.EnableCookies"/> 为 <c>true</c>
+    /// 的请求接入本 client 的 cookie jar（基于 <c>CURLSH</c>），跨请求持久化。
+    /// 不同 <c>CurlHttpClient</c> 实例各自持有独立 jar，互不共享。<c>EnableCookies=false</c>
+    /// 的请求既不读也不写 jar。jar 为纯内存存储，client Dispose 后清空。
+    /// </para>
+    /// </remarks>
+    public class CurlHttpClient : IHttpClient
+    {
+        private static long s_nextRequestId;
+
+        private readonly ICurlApi _api;
+        private readonly CurlLogger _logger;
+        private readonly CurlBackgroundWorker _worker;
+        private readonly ConcurrentDictionary<IntPtr, CancellationTokenRegistration> _cancellations = new();
+        private readonly ConcurrentDictionary<TaskCompletionSource<IHttpResponse>, RequestLogContext> _pendingTasks = new();
+        private CurlCookieJar _cookieJar;  // lazy：首次用到 EnableCookies 时初始化
+        private volatile HttpProxy _proxy; // null = 不走代理（默认）；引用赋值天然原子
+        private int _dnsCacheTimeoutSeconds = 60;
+        private int _maxIdleConnectionAgeSeconds = 118;
+        private int _disposedFlag;
+
+        private bool IsDisposed => Volatile.Read(ref _disposedFlag) != 0;
+
+        /// <summary>全局 HTTP 版本偏好。对所有后续请求生效。默认 PreferH3。</summary>
+        public HttpVersion PreferredVersion { get; set; } = HttpVersion.PreferH3;
+
+        /// <summary>该 client 构造时确定的不可变日志配置。</summary>
+        public CurlLogOptions LogOptions { get; }
+
+        /// <summary>是否验证 SSL 证书。默认 true。</summary>
+        public bool VerifySSL { get; set; } = true;
+
+        /// <summary>
+        /// DNS 缓存超时（秒）。对之后创建的请求生效。默认 60；0 = 禁用缓存；
+        /// -1 = 永久缓存。
+        /// </summary>
+        public int DnsCacheTimeoutSeconds
+        {
+            get => Volatile.Read(ref _dnsCacheTimeoutSeconds);
+            set
+            {
+                if (value < -1)
+                    throw new ArgumentOutOfRangeException(nameof(value),
+                        "DnsCacheTimeoutSeconds must be >= -1 (-1 = cache forever).");
+                Volatile.Write(ref _dnsCacheTimeoutSeconds, value);
+            }
+        }
+
+        /// <summary>
+        /// 连接池中连接允许被复用的最大空闲时间（秒），对应
+        /// <c>CURLOPT_MAXAGE_CONN</c>。对之后创建的请求生效。默认 118；
+        /// 0 = 禁用空闲时间限制。不会中断正在使用的连接。
+        /// </summary>
+        public int MaxIdleConnectionAgeSeconds
+        {
+            get => Volatile.Read(ref _maxIdleConnectionAgeSeconds);
+            set
+            {
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value),
+                        "MaxIdleConnectionAgeSeconds must be >= 0 (0 = no idle age limit).");
+                Volatile.Write(ref _maxIdleConnectionAgeSeconds, value);
+            }
+        }
+
+        /// <summary>
+        /// 默认 User-Agent。对所有请求生效;请求级 <see cref="HttpRequest.Headers"/>
+        /// 里设 <c>User-Agent</c> 会覆盖本值(libcurl slist 优先于 CURLOPT_USERAGENT)。
+        /// 默认 <c>"CurlUnity/0.1.0"</c>。设为 <c>null</c> 或空不覆盖 libcurl 默认。
+        /// </summary>
+        public string UserAgent { get; set; } = "CurlUnity/0.1.0";
+
+        /// <summary>诊断统计。构造时 enableDiagnostics=true 才可用，否则为 null。</summary>
+        public HttpDiagnostics Diagnostics { get; }
+
+        /// <summary>构造参数 <c>maxTotalConnections</c> 的默认值。</summary>
+        public const int DefaultMaxTotalConnections = CurlMulti.DefaultMaxTotalConnections;
+
+        /// <summary>构造参数 <c>maxHostConnections</c> 的默认值。</summary>
+        public const int DefaultMaxHostConnections = CurlMulti.DefaultMaxHostConnections;
+
+        /// <summary>使用默认连接数上限创建 client。</summary>
+        /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
+        public CurlHttpClient(bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics,
+                DefaultMaxTotalConnections, DefaultMaxHostConnections, null)
+        {
+        }
+
+        /// <summary>使用指定的实例级日志配置和默认连接数上限创建 client。</summary>
+        public CurlHttpClient(CurlLogOptions logOptions, bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics,
+                DefaultMaxTotalConnections, DefaultMaxHostConnections, logOptions)
+        {
+        }
+
+        /// <param name="maxTotalConnections">本 client 同时保持的连接总数上限
+        /// （<c>CURLMOPT_MAX_TOTAL_CONNECTIONS</c>）。超出的传输由 libcurl 内部排队等
+        /// 空闲连接，不会失败。0 = 不限（libcurl 默认，不推荐——并发请求一多就会无上限
+        /// 开 socket）。默认 <see cref="DefaultMaxTotalConnections"/>。</param>
+        /// <param name="maxHostConnections">对单个 host 的连接数上限
+        /// （<c>CURLMOPT_MAX_HOST_CONNECTIONS</c>）。0 = 不限。
+        /// 默认 <see cref="DefaultMaxHostConnections"/>。</param>
+        /// <param name="enableDiagnostics">开启后 <see cref="Diagnostics"/> 可用。</param>
+        public CurlHttpClient(int maxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections,
+                maxHostConnections, null)
+        {
+        }
+
+        /// <summary>使用指定的实例级日志配置和连接数上限创建 client。</summary>
+        public CurlHttpClient(CurlLogOptions logOptions, int maxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            bool enableDiagnostics = false)
+            : this(CurlNativeApi.Instance, enableDiagnostics, maxTotalConnections,
+                maxHostConnections, logOptions)
+        {
+        }
+
+        internal CurlHttpClient(ICurlApi api, bool enableDiagnostics = false,
+            int maxTotalConnections = DefaultMaxTotalConnections,
+            int maxHostConnections = DefaultMaxHostConnections,
+            CurlLogOptions logOptions = null)
+        {
+            _api = api ?? throw new ArgumentNullException(nameof(api));
+            LogOptions = logOptions ?? new CurlLogOptions();
+            _logger = new CurlLogger(LogOptions);
+            // 参数校验放在 CurlGlobal.Acquire 之前：校验抛出时全局引用计数不受影响。
+            if (maxTotalConnections < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxTotalConnections), "必须 >= 0（0 = 不限）");
+            if (maxHostConnections < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxHostConnections), "必须 >= 0（0 = 不限）");
+            CurlGlobal.Acquire(_api);
+            CurlCerts.Initialize(_logger);
+            if (enableDiagnostics)
+                Diagnostics = new HttpDiagnostics();
+            _worker = new CurlBackgroundWorker(_api, maxTotalConnections,
+                maxHostConnections, _logger);
+            _worker.Start();
+        }
+
+        public void SetProxy(HttpProxy proxy)
+        {
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
+            _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
+        }
+
+        public void ClearProxy()
+        {
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
+            _proxy = null;
+        }
+
+        public Task<IHttpResponse> SendAsync(HttpRequest request, CancellationToken ct = default)
+        {
+            if (IsDisposed) throw new ObjectDisposedException(nameof(CurlHttpClient));
+
+            var requestId = Interlocked.Increment(ref s_nextRequestId);
+            var requestStopwatch = _logger.IsEnabled(CurlLogLevel.Verbose)
+                ? Stopwatch.StartNew()
+                : null;
+            if (requestStopwatch != null)
+            {
+                var method = request == null
+                    ? "<unknown>"
+                    : request.Method.ToString().ToUpperInvariant();
+                _logger.Verbose(CurlLogCategory.Http,
+                    $"{method} {FormatUrlForLog(request?.Url)} started",
+                    requestId: requestId);
+            }
+
+            // 短路已取消的 token：直接以 Canceled 完成 Task，不分配 CurlRequest，
+            // 也不走 ct.Register 的"注册回调可能同步触发"路径——那条路径在 token
+            // 已取消时会在字典还没写入的窗口里触发回调，虽然最终会靠 OnComplete
+            // 兜底清理，但逻辑绕且依赖多机制串联。明确的前置检查更清晰。
+            if (ct.IsCancellationRequested)
+            {
+                var canceled = new TaskCompletionSource<IHttpResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+                canceled.TrySetCanceled(ct);
+                LogRequestCancelled(requestId, requestStopwatch);
+                return canceled.Task;
+            }
+
+            var tcs = new TaskCompletionSource<IHttpResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            CurlRequest curlReq;
+            try
+            {
+                curlReq = BuildCurlRequest(request, requestId);
+            }
+            catch (Exception ex)
+            {
+                // URL / setopt / slist_append 等前置配置失败，直接让 Task 以异常完成，
+                // 不进入 worker 队列。
+                tcs.TrySetException(ex);
+                LogRequestFailed(requestId, requestStopwatch, ex);
+                return tcs.Task;
+            }
+
+            _pendingTasks[tcs] = new RequestLogContext(requestId, requestStopwatch);
+
+            // OnHeadersReceived 闭包编排：earlyResponse 在 worker 线程的
+            // HeadersReceivedCallback 中创建，OnComplete 中复用。两者都在同一
+            // worker 线程执行，无竞态。
+            HttpResponse earlyResponse = null;
+            var userHeadersCb = request.OnHeadersReceived;
+            if (userHeadersCb != null)
+            {
+                curlReq.HeadersReceivedCallback = (statusCode, rawHeaders) =>
+                {
+                    earlyResponse = new HttpResponse(_api, curlReq.Handle, statusCode,
+                        rawHeaders, _logger, requestId);
+                    userHeadersCb(earlyResponse);
+                };
+                curlReq.OnHandleFreed = () => earlyResponse?.InvalidateHandle();
+            }
+
+            // CancellationToken → 取消请求（提交到后台线程执行 remove_handle）
+            if (ct.CanBeCanceled)
+            {
+                var reg = ct.Register(() =>
+                {
+                    if (tcs.TrySetCanceled(ct))
+                    {
+                        LogRequestCancelled(requestId, requestStopwatch);
+                        _pendingTasks.TryRemove(tcs, out _);
+                        if (_cancellations.TryRemove(curlReq.Handle, out var r))
+                            r.Dispose();
+                        _worker.Cancel(curlReq);
+                    }
+                });
+                _cancellations[curlReq.Handle] = reg;
+            }
+
+            curlReq.OnComplete = curlResp =>
+            {
+                if (_cancellations.TryRemove(curlReq.Handle, out var reg))
+                    reg.Dispose();
+
+                try
+                {
+                    // 计数原则: 只在我们真正 "拥有" 这次请求结果时 Record/RecordFailure —— 即
+                    // TrySet* 返回 true。如果 cancel 赢了竞态(ct.Register 的 TrySetCanceled
+                    // 先执行),这里的 TrySet* 会返回 false,就跳过计数,对齐"取消不计入"契约。
+
+                    // Pipeline 未到 libcurl 就失败的路径(add_handle 失败、非法状态提交、
+                    // remove_handle 失败等),FailureException 已经是 CurlHttpException 或
+                    // OperationCanceledException,直接透传。
+                    // earlyResponse 使用 deferred ownership：传输完成前不拥有 cleanup 权。
+                    // 错误/取消路径下 handle 由请求侧释放，这里只需 invalidate 避免 getinfo UAF。
+
+                    if (curlResp.FailureException != null)
+                    {
+                        // FailureException + EasyHandle==Zero: MultiRemoveHandle 失败，
+                        // handle 仍在 multi 中，不做 EasyCleanup。
+                        earlyResponse?.InvalidateHandle();
+                        if (tcs.TrySetException(curlResp.FailureException))
+                        {
+                            Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch,
+                                curlResp.FailureException);
+                        }
+                        return;
+                    }
+
+                    if (curlReq.UploadError != null)
+                    {
+                        earlyResponse?.InvalidateHandle();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
+                            _api.EasyCleanup(curlResp.EasyHandle);
+                        if (tcs.TrySetException(curlReq.UploadError))
+                        {
+                            Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch, curlReq.UploadError);
+                        }
+                        return;
+                    }
+                    if (curlReq.DownloadError != null)
+                    {
+                        earlyResponse?.InvalidateHandle();
+                        if (curlResp.EasyHandle != IntPtr.Zero)
+                            _api.EasyCleanup(curlResp.EasyHandle);
+                        if (tcs.TrySetException(curlReq.DownloadError))
+                        {
+                            Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch, curlReq.DownloadError);
+                        }
+                        return;
+                    }
+
+                    if (curlResp.CurlCode != CurlNative.CURLE_OK)
+                    {
+                        earlyResponse?.InvalidateHandle();
+                        // getinfo 必须赶在 EasyCleanup 之前,handle 释放后再读是 UAF。
+                        var errorPhase = ReadErrorPhase(curlResp.EasyHandle);
+                        if (curlResp.EasyHandle != IntPtr.Zero)
+                            _api.EasyCleanup(curlResp.EasyHandle);
+                        var curlException = CurlHttpException.FromEasyCode(
+                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode),
+                            errorPhase);
+                        if (tcs.TrySetException(curlException))
+                        {
+                            Diagnostics?.RecordFailure();
+                            LogRequestFailed(requestId, requestStopwatch, curlException);
+                        }
+                        return;
+                    }
+
+                    // 成功路径: earlyResponse 存在时复用同一实例，填入 body 和最终 headers。
+                    HttpResponse response;
+                    if (earlyResponse != null)
+                    {
+                        response = earlyResponse;
+                        response.FinalizeTransfer(curlResp.Body, curlResp.RawHeaders);
+                    }
+                    else
+                    {
+                        response = new HttpResponse(_api, curlResp, _logger, requestId);
+                    }
+                    Diagnostics?.Record(response);
+                    if (tcs.TrySetResult(response))
+                    {
+                        LogRequestCompleted(requestId, requestStopwatch, response.StatusCode);
+                    }
+                    else
+                    {
+                        response.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (tcs.TrySetException(ex))
+                        LogRequestFailed(requestId, requestStopwatch, ex);
+                }
+                finally
+                {
+                    _pendingTasks.TryRemove(tcs, out _);
+                }
+            };
+
+            _worker.Send(curlReq);
+            return tcs.Task;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
+            _worker.Dispose();
+
+            // Worker 已停止。正在飞的请求被"打断",语义上等同于取消(不是
+            // "用了已关闭对象"),用 TrySetCanceled 让 Task 进入 Canceled 状态,
+            // 与 CancellationToken 路径一致(await 端拿到的都是 TaskCanceledException,
+            // 但 Task.IsCanceled=true,而不是 Faulted)。用 TrySetException(OCE) 会让
+            // Task.IsCanceled=false / IsFaulted=true,破坏 Task.WhenAll/ContinueWith
+            // 对 "取消 vs 失败" 的分支判断。
+            // SendAsync 入口的 IsDisposed 检查仍用 ODE(那是用法错误,不是运行时中断)。
+            foreach (var kv in _pendingTasks)
+            {
+                if (kv.Key.TrySetCanceled())
+                    LogRequestCancelled(kv.Value.RequestId, kv.Value.Stopwatch);
+            }
+            _pendingTasks.Clear();
+
+            foreach (var kv in _cancellations)
+                kv.Value.Dispose();
+            _cancellations.Clear();
+
+            // 只有在 worker 线程确实已退出的情况下才敢清理 share/release 全局引用计数。
+            // 否则可能触发 curl_global_cleanup 时 worker 仍在 libcurl 内部
+            // （被用户回调卡住），与 global state 发生 use-after-free。
+            // share handle 同理：若有 easy handle 仍附在 share 上 perform，
+            // share_cleanup 会返回 CURLSHE_IN_USE / 与 native 状态竞争。
+            // 与 Worker 里"跳过 multi cleanup"的策略保持一致：泄漏一次不会
+            // 导致其它客户端故障；进程退出时 OS 会回收所有内存。
+            if (_worker.WorkerExitedCleanly)
+            {
+                _cookieJar?.Dispose();
+                CurlGlobal.Release(_api);
+            }
+            else
+            {
+                if (_logger.IsEnabled(CurlLogLevel.Error))
+                    _logger.Error(CurlLogCategory.Core,
+                        "CurlHttpClient.Dispose: worker did not exit cleanly; skipping cookie jar cleanup and CurlGlobal.Release to avoid " +
+                        "curl_share_cleanup / curl_global_cleanup racing with the worker thread that is still inside libcurl.");
+            }
+        }
+
+        private CurlRequest BuildCurlRequest(HttpRequest request, long requestId)
+        {
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+
+            var curlReq = new CurlRequest(_api, _logger, requestId);
+            try
+            {
+                ConfigureCurlRequest(curlReq, request);
+                return curlReq;
+            }
+            catch
+            {
+                // 配置过程中抛了异常，释放已分配的 easy handle / slist / buffers，
+                // 以免把半成品泄漏给调用方。
+                curlReq.Dispose();
+                throw;
+            }
+        }
+
+        private void ConfigureCurlRequest(CurlRequest curlReq, HttpRequest request)
+        {
+            var h = curlReq.Handle;
+
+            // URL 是请求成立的前提；失败必须往外抛，不能偷偷走"URL 为空的 request"。
+            CheckSetOpt("CURLOPT_URL", _api.SetOptString(h, CurlNative.CURLOPT_URL, request.Url));
+
+            // 自定义 IP 地址在这里转换为 libcurl 私有规则；原生层不复制 slist，必须由
+            // CurlRequest 持有到传输结束。
+            if (request.IPAddresses != null)
+            {
+                var resolveRule = CreateResolveRule(request);
+                curlReq.ResolveSlist = _api.SListAppend(IntPtr.Zero, resolveRule);
+                if (curlReq.ResolveSlist == IntPtr.Zero)
+                    throw new InvalidOperationException(
+                        "curl_slist_append returned null while building the DNS mapping");
+
+                CheckSetOpt("CURLOPT_RESOLVE",
+                    _api.SetOptPtr(h, CurlNative.CURLOPT_RESOLVE, curlReq.ResolveSlist));
+            }
+
+            // Proxy：未设置时显式置空禁用 libcurl 读 HTTPS_PROXY/HTTP_PROXY 环境变量
+            // （避免进程环境泄漏到网络配置）;设置后由 URL scheme 自动决定代理类型。
+            // HTTP/3 无法经由 HTTP 代理,libcurl 会自动回退到 HTTP/2 over TCP。
+            var proxy = _proxy; // 本次 build 内读一次,SetProxy/ClearProxy 只影响后续请求
+            if (proxy == null)
+            {
+                CheckSetOpt("CURLOPT_PROXY", _api.SetOptString(h, CurlNative.CURLOPT_PROXY, ""));
+            }
+            else
+            {
+                CheckSetOpt("CURLOPT_PROXY", _api.SetOptString(h, CurlNative.CURLOPT_PROXY, proxy.Url));
+                // 同时屏蔽 NO_PROXY 环境变量, 否则 target 是 loopback/内网时会被静默绕过代理
+                CheckSetOpt("CURLOPT_NOPROXY", _api.SetOptString(h, CurlNative.CURLOPT_NOPROXY, ""));
+                if (proxy.Credentials != null)
+                {
+                    var user = proxy.Credentials.UserName ?? string.Empty;
+                    var pwd = proxy.Credentials.Password ?? string.Empty;
+                    EnsureNoCrLf(user, "代理用户名");
+                    EnsureNoCrLf(pwd, "代理密码");
+                    CheckSetOpt("CURLOPT_PROXYUSERPWD",
+                        _api.SetOptString(h, CurlNative.CURLOPT_PROXYUSERPWD, $"{user}:{pwd}"));
+                }
+            }
+
+            // 多线程环境必须禁用信号，避免 Unix 下 SIGALRM 干扰其他线程
+            CheckSetOpt("CURLOPT_NOSIGNAL", _api.SetOptLong(h, CurlNative.CURLOPT_NOSIGNAL, 1));
+
+            // DNS 缓存属于 multi handle，但有效期由发起查询的 easy handle 决定。
+            // client 属性在构建请求时读取，因此运行时修改只影响之后创建的请求。
+            CheckSetOpt("CURLOPT_DNS_CACHE_TIMEOUT",
+                _api.SetOptLong(h, CurlNative.CURLOPT_DNS_CACHE_TIMEOUT,
+                    DnsCacheTimeoutSeconds));
+
+            CheckSetOpt("CURLOPT_MAXAGE_CONN",
+                _api.SetOptLong(h, CurlNative.CURLOPT_MAXAGE_CONN,
+                    MaxIdleConnectionAgeSeconds));
+
+            // TCP keep-alive：SSE 等长连接内部开启（HttpRequest 内部字段，不对外暴露）。
+            // 不处理 Nagle：libcurl 默认 TCP_NODELAY=1（Nagle 已关），无需设置。
+            if (request.TcpKeepAlive)
+                CheckSetOpt("CURLOPT_TCP_KEEPALIVE", _api.SetOptLong(h, CurlNative.CURLOPT_TCP_KEEPALIVE, 1));
+
+            // 第一版不接管 libcurl 原生日志；Verbose 仍由 libcurl 直接写 stderr。
+            // 日志选项失败不能改变请求语义，因此只告警、不走 CheckSetOpt。
+            if (_logger.IsEnabled(CurlLogLevel.Verbose))
+            {
+                var rcVerbose = _api.SetOptLong(h, CurlNative.CURLOPT_VERBOSE, 1);
+                if (rcVerbose != CurlNative.CURLE_OK)
+                    _logger.Warning(CurlLogCategory.Http,
+                        $"CURLOPT_VERBOSE returned {rcVerbose}: {_api.GetErrorString(rcVerbose)}",
+                        requestId: curlReq.RequestId);
+            }
+
+            // HTTP version（枚举值与 curl 定义一致，直接 cast）
+            CheckSetOpt("CURLOPT_HTTP_VERSION",
+                _api.SetOptLong(h, CurlNative.CURLOPT_HTTP_VERSION, (long)PreferredVersion));
+
+            // User-Agent: 设置 CURLOPT_USERAGENT; 请求级 Headers 里的 User-Agent 走
+            // slist 路径, 会覆盖这个值(libcurl 自身行为)。空/null 跳过, 保留 libcurl 默认。
+            if (!string.IsNullOrEmpty(UserAgent))
+            {
+                EnsureNoCrLf(UserAgent, "UserAgent");
+                CheckSetOpt("CURLOPT_USERAGENT",
+                    _api.SetOptString(h, CurlNative.CURLOPT_USERAGENT, UserAgent));
+            }
+
+            // 响应自动解压: "" 让 libcurl 使用编译时所有支持的算法(本项目链接了 zlib,
+            // 所以是 gzip + deflate;brotli/zstd 编译时禁用了)。libcurl 会发
+            // Accept-Encoding header 并在收到响应时透明解压。
+            if (request.AutoDecompressResponse)
+            {
+                CheckSetOpt("CURLOPT_ACCEPT_ENCODING",
+                    _api.SetOptString(h, CurlNative.CURLOPT_ACCEPT_ENCODING, ""));
+            }
+
+            // SSL 验证
+            if (!VerifySSL)
+            {
+                CheckSetOpt("CURLOPT_SSL_VERIFYPEER",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYPEER, 0));
+                CheckSetOpt("CURLOPT_SSL_VERIFYHOST",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_SSL_VERIFYHOST, 0));
+            }
+
+            // Body / BodyStream 互斥 + 语义校验
+            bool hasStream = request.BodyStream != null;
+            bool hasBody = request.Body != null;  // 互斥判断不依赖长度, 空 byte[] 也禁止与 stream 共存
+            if (hasStream && hasBody)
+                throw new InvalidOperationException(
+                    "HttpRequest.Body 与 BodyStream 互斥, 同时设置无法确定上传源");
+            if (hasStream && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
+                throw new InvalidOperationException(
+                    $"HTTP {request.Method} 不允许带 body; BodyStream 需配合 POST/PUT/PATCH 等方法");
+            // byte[] Body 与 BodyStream 同等校验：libcurl 的 COPYPOSTFIELDS 会把请求
+            // 隐式改写成 POST，GET 分支又没有 CUSTOMREQUEST 兜底——不校验的话
+            // "GET + Body" 实际发出的是 POST，属于静默改写行为，必须 fail-fast。
+            if (hasBody && request.Body.Length > 0
+                && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head))
+                throw new InvalidOperationException(
+                    $"HTTP {request.Method} 不允许带 body; Body 需配合 POST/PUT/PATCH 等方法");
+            if (hasStream && request.BodyLength.HasValue && request.BodyLength.Value < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.BodyLength), "BodyLength 不能为负数");
+
+            // Method / Body
+            if (hasStream)
+            {
+                // 流式:统一用 UPLOAD=1 + CUSTOMREQUEST 指定方法;UPLOAD 让 libcurl 调 READFUNCTION
+                // 拉取 body。与 CURLOPT_POST=1 互斥,但 CUSTOMREQUEST 可覆盖成 POST。
+                CheckSetOpt("CURLOPT_UPLOAD", _api.SetOptLong(h, CurlNative.CURLOPT_UPLOAD, 1));
+                CheckSetOpt("CURLOPT_CUSTOMREQUEST",
+                    _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
+                        request.Method.ToString().ToUpperInvariant()));
+                if (request.BodyLength.HasValue)
+                {
+                    // 已知长度: 写 Content-Length header, 按 fixed-length 上传
+                    CheckSetOpt("CURLOPT_INFILESIZE_LARGE",
+                        _api.SetOptOffT(h, CurlNative.CURLOPT_INFILESIZE_LARGE, request.BodyLength.Value));
+                }
+                // 未设 INFILESIZE → libcurl 默认走 Transfer-Encoding: chunked
+                curlReq.UploadStream = request.BodyStream;
+                // READFUNCTION 的注册由 CurlMulti.Send 根据 UploadStream != null 统一处理
+            }
+            else
+            {
+                switch (request.Method)
+                {
+                    case HttpMethod.Get:
+                        break; // GET 是默认
+                    case HttpMethod.Post:
+                        CheckSetOpt("CURLOPT_POST", _api.SetOptLong(h, CurlNative.CURLOPT_POST, 1));
+                        break;
+                    case HttpMethod.Head:
+                        CheckSetOpt("CURLOPT_NOBODY", _api.SetOptLong(h, CurlNative.CURLOPT_NOBODY, 1));
+                        break;
+                    default:
+                        CheckSetOpt("CURLOPT_CUSTOMREQUEST",
+                            _api.SetOptString(h, CurlNative.CURLOPT_CUSTOMREQUEST,
+                                request.Method.ToString().ToUpperInvariant()));
+                        break;
+                }
+
+                // byte[] Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容。
+                // 空 byte[] (Length == 0) 走默认, 不需要设 POSTFIELDS。
+                if (hasBody && request.Body.Length > 0)
+                {
+                    CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
+                        _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length));
+                    var pin = System.Runtime.InteropServices.GCHandle.Alloc(request.Body,
+                        System.Runtime.InteropServices.GCHandleType.Pinned);
+                    try
+                    {
+                        CheckSetOpt("CURLOPT_COPYPOSTFIELDS",
+                            _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject()));
+                    }
+                    finally
+                    {
+                        pin.Free(); // curl 已复制数据，可以立即释放 pin
+                    }
+                }
+            }
+
+            // Headers: slist 生命周期由 CurlRequest.Dispose 管理
+            if (request.Headers != null)
+            {
+                var slist = IntPtr.Zero;
+                foreach (var kv in request.Headers)
+                {
+                    // CR/LF 注入防护：值原样进 slist，libcurl 不做过滤。token/凭据等
+                    // 外部来源的 header 值带 \r\n 即可注入任意 header 甚至请求行。
+                    EnsureNoCrLf(kv.Key, $"header name '{kv.Key}'");
+                    EnsureNoCrLf(kv.Value, $"header '{kv.Key}' 的值");
+                    var next = _api.SListAppend(slist, $"{kv.Key}: {kv.Value}");
+                    if (next == IntPtr.Zero)
+                    {
+                        // slist_append 返回 NULL 通常是 OOM。已积累的节点由 curlReq 最终 Dispose
+                        // 时释放——我们先把当前 slist 挂上去，保证错误路径也能回收。
+                        if (slist != IntPtr.Zero)
+                            curlReq.HeaderSlist = slist;
+                        throw new InvalidOperationException(
+                            $"curl_slist_append returned null while building header for key '{kv.Key}'");
+                    }
+                    slist = next;
+                }
+
+                if (slist != IntPtr.Zero)
+                {
+                    curlReq.HeaderSlist = slist;
+                    CheckSetOpt("CURLOPT_HTTPHEADER",
+                        _api.SetOptPtr(h, CurlNative.CURLOPT_HTTPHEADER, slist));
+                }
+            }
+
+            // Timeouts
+            if (request.ConnectTimeoutMs > 0)
+                CheckSetOpt("CURLOPT_CONNECTTIMEOUT_MS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_CONNECTTIMEOUT_MS, request.ConnectTimeoutMs));
+            if (request.TimeoutMs > 0)
+                CheckSetOpt("CURLOPT_TIMEOUT_MS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_TIMEOUT_MS, request.TimeoutMs));
+
+            // 低速检测（成对启用）：速率低于 limit 持续 time 秒 → 以超时失败。
+            // 这是 TimeoutMs=0 的长传输检测"传输中途僵死连接"的唯一手段。
+            var lowLimit = request.LowSpeedLimitBytesPerSecond;
+            var lowTime = request.LowSpeedTimeSeconds;
+            if (lowLimit < 0 || lowTime < 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.LowSpeedLimitBytesPerSecond), "低速检测参数不能为负数");
+            if ((lowLimit > 0) != (lowTime > 0))
+                throw new InvalidOperationException(
+                    "LowSpeedLimitBytesPerSecond 与 LowSpeedTimeSeconds 必须成对设置（同时为正或同时为 0）");
+            if (lowLimit > 0)
+            {
+                CheckSetOpt("CURLOPT_LOW_SPEED_LIMIT",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_LOW_SPEED_LIMIT, lowLimit));
+                CheckSetOpt("CURLOPT_LOW_SPEED_TIME",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_LOW_SPEED_TIME, lowTime));
+            }
+
+            // Follow redirects（可按请求关闭；MaxRedirects 防重定向环，超限以
+            // CURLE_TOO_MANY_REDIRECTS 失败）。注意 libcurl 跟随时会把自定义
+            // header（含 Authorization）发给跨主机重定向目标，见 HttpRequest 文档。
+            if (request.MaxRedirects < -1)
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.MaxRedirects), "MaxRedirects 仅允许 >= -1（-1 = 不限制）");
+            curlReq.FollowRedirects = request.FollowRedirects;
+            if (request.FollowRedirects)
+            {
+                CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 1));
+                CheckSetOpt("CURLOPT_MAXREDIRS",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_MAXREDIRS, request.MaxRedirects));
+            }
+            else
+            {
+                CheckSetOpt("CURLOPT_FOLLOWLOCATION",
+                    _api.SetOptLong(h, CurlNative.CURLOPT_FOLLOWLOCATION, 0));
+            }
+
+            // Cookies：挂到 client 共享 jar 上 + 激活 cookie engine。
+            // 注意：这里不能用 CURLOPT_COOKIELIST=""（那是"清空 jar"指令，会擦掉其他
+            // handle 刚写入的 cookie）。COOKIEFILE="" 只激活引擎、不读文件。
+            if (request.EnableCookies)
+            {
+                EnsureCookieJar();
+                CheckSetOpt("CURLOPT_SHARE",
+                    _api.SetOptPtr(h, CurlNative.CURLOPT_SHARE, _cookieJar.Handle));
+                CheckSetOpt("CURLOPT_COOKIEFILE",
+                    _api.SetOptString(h, CurlNative.CURLOPT_COOKIEFILE, ""));
+            }
+
+            // Response headers capture
+            curlReq.CaptureHeaders = request.EnableResponseHeaders;
+
+            // Streaming
+            curlReq.DataCallback = request.OnDataReceived;
+            curlReq.BeforeSendRequestCallback = request.OnBeforeSendRequest;
+            curlReq.HeaderReceivedCallback = request.OnHeaderReceived;
+        }
+
+        private static string CreateResolveRule(HttpRequest request)
+        {
+            if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri) ||
+                uri.HostNameType != UriHostNameType.Dns ||
+                string.IsNullOrEmpty(uri.IdnHost) || uri.Port <= 0)
+            {
+                throw new ArgumentException(
+                    "设置 IPAddresses 时，Url 必须包含域名和有效端口。", nameof(request.Url));
+            }
+
+            var addresses = new List<string>();
+            foreach (var value in request.IPAddresses)
+            {
+                var text = value?.Trim();
+                if (string.IsNullOrEmpty(text) ||
+                    text.IndexOf('[') >= 0 || text.IndexOf(']') >= 0 ||
+                    !IPAddress.TryParse(text, out var address))
+                {
+                    throw new ArgumentException(
+                        $"IPAddresses 包含无效 IP 地址：'{value ?? "<null>"}'。IPv6 请勿添加方括号。",
+                        nameof(request.IPAddresses));
+                }
+
+                var normalized = address.ToString();
+                addresses.Add(address.AddressFamily ==
+                    System.Net.Sockets.AddressFamily.InterNetworkV6
+                    ? $"[{normalized}]"
+                    : normalized);
+            }
+
+            if (addresses.Count == 0)
+                return $"-{uri.IdnHost}:{uri.Port}";
+
+            return $"+{uri.IdnHost}:{uri.Port}:{string.Join(",", addresses)}";
+        }
+
+        private void EnsureCookieJar()
+        {
+            if (_cookieJar != null) return;
+            // 允许并发首次请求；CompareExchange 输的一方本地构造的 jar 需被清理。
+            var fresh = new CurlCookieJar(_api, _logger);
+            if (Interlocked.CompareExchange(ref _cookieJar, fresh, null) != null)
+                fresh.Dispose();
+        }
+
+        private static string FormatUrlForLog(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                return "<invalid-url>";
+
+            var safeUrl = uri.GetComponents(
+                UriComponents.SchemeAndServer | UriComponents.Path,
+                UriFormat.UriEscaped);
+            if (!string.IsNullOrEmpty(uri.Query))
+                safeUrl += "?<redacted>";
+            return safeUrl;
+        }
+
+        private void LogRequestCompleted(long requestId, Stopwatch stopwatch, int statusCode)
+        {
+            if (stopwatch == null) return;
+            _logger.Verbose(CurlLogCategory.Http,
+                $"completed status={statusCode} elapsed={stopwatch.ElapsedMilliseconds}ms",
+                requestId: requestId);
+        }
+
+        private void LogRequestCancelled(long requestId, Stopwatch stopwatch)
+        {
+            if (stopwatch == null) return;
+            _logger.Verbose(CurlLogCategory.Http,
+                $"cancelled elapsed={stopwatch.ElapsedMilliseconds}ms",
+                requestId: requestId);
+        }
+
+        private void LogRequestFailed(long requestId, Stopwatch stopwatch, Exception exception)
+        {
+            if (stopwatch == null) return;
+
+            var result = exception is CurlHttpException curlException
+                ? $"failed kind={curlException.ErrorKind} curlCode={curlException.CurlCode}"
+                : $"failed type={exception.GetType().Name}";
+            _logger.Verbose(CurlLogCategory.Http,
+                $"{result} elapsed={stopwatch.ElapsedMilliseconds}ms",
+                exception, requestId);
+        }
+
+        /// <summary>
+        /// header 注入防护：拒绝包含 CR/LF 的值进入请求头/凭据等原样写入协议流的
+        /// 位置。与 MultipartFormData.ValidateContentType 同一防线。
+        /// </summary>
+        private static void EnsureNoCrLf(string value, string what)
+        {
+            if (value != null && (value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0))
+                throw new ArgumentException($"{what} 不能包含 CR/LF 字符（header 注入防护）");
+        }
+
+        // 没跟过重定向、且拿到了响应状态行,才算确证进入传输阶段。判断依据、成立条件,以及
+        // 升级 curl 后该怎么复核,都写在 HttpErrorPhase 上。
+        // 其余一律 Undefined——包括 handle 已交出、getinfo 失败、跟过重定向(状态码可能是上一跳
+        // 的残值)、以及确实还没收到响应。后者不等于"不在传输中",只是无法确证,不能就近归类。
+        private HttpErrorPhase ReadErrorPhase(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero) return HttpErrorPhase.Undefined;
+            if (_api.GetInfoLong(handle, CurlNative.CURLINFO_REDIRECT_COUNT, out var redirects)
+                    != CurlNative.CURLE_OK || redirects > 0)
+                return HttpErrorPhase.Undefined;
+            if (_api.GetInfoLong(handle, CurlNative.CURLINFO_RESPONSE_CODE, out var status)
+                    != CurlNative.CURLE_OK)
+                return HttpErrorPhase.Undefined;
+            return status > 0 ? HttpErrorPhase.Transfer : HttpErrorPhase.Undefined;
+        }
+
+        private void CheckSetOpt(string optName, int rc)
+        {
+            if (rc == CurlNative.CURLE_OK) return;
+            // 把 CURLcode 映射成 CurlHttpException。URL 格式错会自然落到 InvalidUrl;
+            // 其它 setopt 失败通常是 SetupFailed / Unknown。保留 optName 便于日志定位。
+            throw new CurlHttpException(
+                CurlHttpException.MapEasyCode(rc),
+                rc,
+                $"curl_easy_setopt({optName}): {_api.GetErrorString(rc)}");
+        }
+
+        private readonly struct RequestLogContext
+        {
+            internal RequestLogContext(long requestId, Stopwatch stopwatch)
+            {
+                RequestId = requestId;
+                Stopwatch = stopwatch;
+            }
+
+            internal long RequestId { get; }
+            internal Stopwatch Stopwatch { get; }
+        }
+    }
+}
