@@ -120,6 +120,16 @@ namespace CurlUnity.IntegrationTests.TestServer
                 return Results.Redirect($"{baseUrl}/redirect/{n - 1}");
             });
 
+            // 跳到本站任意相对路径。/redirect/{n} 只能自跳到 /redirect/{n-1} 并以 200 收尾,
+            // 构造不出"先重定向、下一跳再失败"的组合场景。限定相对路径, 不做开放重定向。
+            app.MapGet("/redirect-to", (HttpRequest req) =>
+            {
+                var to = (string)req.Query["to"];
+                return string.IsNullOrEmpty(to) || !to.StartsWith("/")
+                    ? Results.BadRequest("to must be a relative path")
+                    : Results.Redirect(to);
+            });
+
             app.MapGet("/redirect-with-headers/{n:int}", (int n, HttpContext ctx) =>
             {
                 if (n <= 0)

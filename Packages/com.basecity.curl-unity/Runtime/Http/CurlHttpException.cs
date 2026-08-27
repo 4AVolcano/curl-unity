@@ -47,15 +47,29 @@ namespace CurlUnity.Http
         /// </summary>
         public int CurlCode { get; }
 
-        internal CurlHttpException(HttpErrorKind kind, int curlCode, string nativeMessage)
+        /// <summary>
+        /// 失败发生在哪一环。拿不到判据时为 <see cref="HttpErrorPhase.Undefined"/>——
+        /// 那是"没能判定",不是"确定不在传输中",调用方据此留空,不要猜。
+        /// </summary>
+        /// <remarks>
+        /// 只为 <see cref="HttpErrorKind.Timeout"/> 而存在:CURLcode 28 不带阶段信息,而其余
+        /// ErrorKind 的阶段由 CURLcode 本身唯一确定,不需要读这个字段。取值范围与判据的取舍
+        /// 见 <see cref="HttpErrorPhase"/>。
+        /// </remarks>
+        public HttpErrorPhase ErrorPhase { get; }
+
+        internal CurlHttpException(HttpErrorKind kind, int curlCode, string nativeMessage,
+                                   HttpErrorPhase errorPhase = HttpErrorPhase.Undefined)
             : base(BuildMessage(kind, curlCode, nativeMessage))
         {
             ErrorKind = kind;
             CurlCode = curlCode;
+            ErrorPhase = errorPhase;
         }
 
-        internal static CurlHttpException FromEasyCode(int curlCode, string nativeMessage)
-            => new CurlHttpException(MapEasyCode(curlCode), curlCode, nativeMessage);
+        internal static CurlHttpException FromEasyCode(int curlCode, string nativeMessage,
+                                                       HttpErrorPhase errorPhase = HttpErrorPhase.Undefined)
+            => new CurlHttpException(MapEasyCode(curlCode), curlCode, nativeMessage, errorPhase);
 
         /// <summary>
         /// 本库 <c>curl_multi_*</c> / setup 路径失败构造异常;统一归类到

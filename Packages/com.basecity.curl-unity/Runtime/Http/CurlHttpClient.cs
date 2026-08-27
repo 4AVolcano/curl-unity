@@ -319,10 +319,13 @@ namespace CurlUnity.Http
                     if (curlResp.CurlCode != CurlNative.CURLE_OK)
                     {
                         earlyResponse?.InvalidateHandle();
+                        // getinfo 必须赶在 EasyCleanup 之前,handle 释放后再读是 UAF。
+                        var errorPhase = ReadErrorPhase(curlResp.EasyHandle);
                         if (curlResp.EasyHandle != IntPtr.Zero)
                             _api.EasyCleanup(curlResp.EasyHandle);
                         var curlException = CurlHttpException.FromEasyCode(
-                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode));
+                            curlResp.CurlCode, _api.GetErrorString(curlResp.CurlCode),
+                            errorPhase);
                         if (tcs.TrySetException(curlException))
                         {
                             Diagnostics?.RecordFailure();
@@ -806,6 +809,22 @@ namespace CurlUnity.Http
         {
             if (value != null && (value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0))
                 throw new ArgumentException($"{what} 不能包含 CR/LF 字符（header 注入防护）");
+        }
+
+        // 没跟过重定向、且拿到了响应状态行,才算确证进入传输阶段。判断依据、成立条件,以及
+        // 升级 curl 后该怎么复核,都写在 HttpErrorPhase 上。
+        // 其余一律 Undefined——包括 handle 已交出、getinfo 失败、跟过重定向(状态码可能是上一跳
+        // 的残值)、以及确实还没收到响应。后者不等于"不在传输中",只是无法确证,不能就近归类。
+        private HttpErrorPhase ReadErrorPhase(IntPtr handle)
+        {
+            if (handle == IntPtr.Zero) return HttpErrorPhase.Undefined;
+            if (_api.GetInfoLong(handle, CurlNative.CURLINFO_REDIRECT_COUNT, out var redirects)
+                    != CurlNative.CURLE_OK || redirects > 0)
+                return HttpErrorPhase.Undefined;
+            if (_api.GetInfoLong(handle, CurlNative.CURLINFO_RESPONSE_CODE, out var status)
+                    != CurlNative.CURLE_OK)
+                return HttpErrorPhase.Undefined;
+            return status > 0 ? HttpErrorPhase.Transfer : HttpErrorPhase.Undefined;
         }
 
         private void CheckSetOpt(string optName, int rc)
