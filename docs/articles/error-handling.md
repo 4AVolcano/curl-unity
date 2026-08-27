@@ -22,10 +22,11 @@
 - `CurlCode` : 原始 libcurl 返回值(`CURLcode` 或 `CURLMcode`), 用于日志和 issue 排查
 - `ErrorPhase` : [`HttpErrorPhase`](xref:CurlUnity.Http.HttpErrorPhase) 枚举, 失败发生在哪一环。
   **只为 `Timeout` 而存在**——`CURLcode 28` 不带阶段信息, 而其它 `ErrorKind` 的阶段由
-  `CurlCode` 本身唯一确定。目前只能确证 `Transfer`(已收到响应首字节)一档;
-  `Undefined` 表示**没能判定**, 不表示"不在传输中"——卡在 TCP 建连 / TLS 握手 / 等响应
-  在超时路径下 libcurl 不留可靠痕迹, 复用连接与卡在 DNS 也是同一签名。遇到 `Undefined`
-  应当留空, 不要就近归类。
+  `CurlCode` 本身唯一确定。判据是 `CURLINFO_REDIRECT_COUNT == 0` 且 `CURLINFO_RESPONSE_CODE > 0`:
+  拿到响应状态行就确证已进入传输, 跟过重定向则状态码可能是上一跳的残值, 不作数。
+  `Undefined` 表示**没能判定**, 不表示"不在传输中"——请求已发出、服务端不响应也是这个签名。
+  遇到 `Undefined` 应当留空, 不要就近归类。判据的成立条件和 curl 升级后的复核办法写在
+  [`HttpErrorPhase`](xref:CurlUnity.Http.HttpErrorPhase) 上。
 
 基本用法:
 

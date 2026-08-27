@@ -811,15 +811,20 @@ namespace CurlUnity.Http
                 throw new ArgumentException($"{what} 不能包含 CR/LF 字符（header 注入防护）");
         }
 
-        // CURLINFO_STARTTRANSFER_TIME_T > 0 即已收到响应首字节 → Transfer。取舍见 HttpErrorPhase。
-        // 其余一律 Undefined:handle 已交出 / getinfo 失败是没测到,us == 0 是测到了但"还没收到
-        // 响应"并不指向任何一个具体环节——两者都不足以定位,不能就近归类。
+        // 没跟过重定向、且拿到了响应状态行,才算确证进入传输阶段。判断依据、成立条件,以及
+        // 升级 curl 后该怎么复核,都写在 HttpErrorPhase 上。
+        // 其余一律 Undefined——包括 handle 已交出、getinfo 失败、跟过重定向(状态码可能是上一跳
+        // 的残值)、以及确实还没收到响应。后者不等于"不在传输中",只是无法确证,不能就近归类。
         private HttpErrorPhase ReadErrorPhase(IntPtr handle)
         {
             if (handle == IntPtr.Zero) return HttpErrorPhase.Undefined;
-            var rc = _api.GetInfoOffT(handle, CurlNative.CURLINFO_STARTTRANSFER_TIME_T, out var us);
-            if (rc != CurlNative.CURLE_OK) return HttpErrorPhase.Undefined;
-            return us > 0 ? HttpErrorPhase.Transfer : HttpErrorPhase.Undefined;
+            if (_api.GetInfoLong(handle, CurlNative.CURLINFO_REDIRECT_COUNT, out var redirects)
+                    != CurlNative.CURLE_OK || redirects > 0)
+                return HttpErrorPhase.Undefined;
+            if (_api.GetInfoLong(handle, CurlNative.CURLINFO_RESPONSE_CODE, out var status)
+                    != CurlNative.CURLE_OK)
+                return HttpErrorPhase.Undefined;
+            return status > 0 ? HttpErrorPhase.Transfer : HttpErrorPhase.Undefined;
         }
 
         private void CheckSetOpt(string optName, int rc)
