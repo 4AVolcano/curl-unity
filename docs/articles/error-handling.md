@@ -16,10 +16,16 @@
 
 ## `CurlHttpException`
 
-网络层失败的统一异常类型。两个关键字段:
+网络层失败的统一异常类型。关键字段:
 
 - `ErrorKind` : [`HttpErrorKind`](xref:CurlUnity.Http.HttpErrorKind) 枚举, 业务代码基于这个做 switch / 重试策略
 - `CurlCode` : 原始 libcurl 返回值(`CURLcode` 或 `CURLMcode`), 用于日志和 issue 排查
+- `ErrorPhase` : [`HttpErrorPhase`](xref:CurlUnity.Http.HttpErrorPhase) 枚举, 失败发生在哪一环。
+  **只为 `Timeout` 而存在**——`CURLcode 28` 不带阶段信息, 而其它 `ErrorKind` 的阶段由
+  `CurlCode` 本身唯一确定。目前只能确证 `Transfer`(已收到响应首字节)一档;
+  `Undefined` 表示**没能判定**, 不表示"不在传输中"——卡在 TCP 建连 / TLS 握手 / 等响应
+  在超时路径下 libcurl 不留可靠痕迹, 复用连接与卡在 DNS 也是同一签名。遇到 `Undefined`
+  应当留空, 不要就近归类。
 
 基本用法:
 
