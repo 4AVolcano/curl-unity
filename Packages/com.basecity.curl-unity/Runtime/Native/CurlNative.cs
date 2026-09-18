@@ -59,7 +59,7 @@ namespace CurlUnity.Native
         public const int CURLOPT_USERAGENT = 10018;
         public const int CURLOPT_ACCEPT_ENCODING = 10102;
         public const int CURLOPT_HTTP_VERSION = 84;
-        public const int CURLOPT_ALTSVC = 10230;
+        public const int CURLOPT_ALTSVC = 10287;
         public const int CURLOPT_CONNECTTIMEOUT_MS = 156;
         // 低速检测: 传输速率低于 LIMIT (bytes/s) 持续 TIME 秒 → CURLE_OPERATION_TIMEDOUT。
         // 用于检测 NAT 静默断链/网络切换后的僵死连接。
