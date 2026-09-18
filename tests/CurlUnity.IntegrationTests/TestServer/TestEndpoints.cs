@@ -43,6 +43,23 @@ namespace CurlUnity.IntegrationTests.TestServer
                     return Results.Json(new { method = req.Method, bodyLength = body?.Length ?? 0, body });
                 });
 
+            // 请求传输语义回显: 用于校验空 body 请求实际发出的是 Content-Length: 0,
+            // 而不是 chunked + Expect: 100-continue(后者说明 libcurl 退回了 read callback)。
+            app.MapMethods("/request-info", new[] { "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS" },
+                async (HttpRequest req) =>
+                {
+                    using var ms = new System.IO.MemoryStream();
+                    await req.Body.CopyToAsync(ms);
+                    return Results.Json(new
+                    {
+                        method = req.Method,
+                        contentLength = req.Headers["Content-Length"].ToString(),
+                        transferEncoding = req.Headers["Transfer-Encoding"].ToString(),
+                        expect = req.Headers["Expect"].ToString(),
+                        bodyLength = ms.Length,
+                    });
+                });
+
             // Cookie: set a cookie
             app.MapGet("/set-cookie", (HttpContext ctx) =>
             {
