@@ -598,21 +598,34 @@ namespace CurlUnity.Http
                 }
 
                 // byte[] Body: 先设 size 再设 data，COPYPOSTFIELDS 会复制内容。
-                // 空 byte[] (Length == 0) 走默认, 不需要设 POSTFIELDS。
-                if (hasBody && request.Body.Length > 0)
+                // POSTFIELDSIZE 必须无条件设置, 包括 Body 为 null / 空 byte[] 的情况:
+                // CURLOPT_POST=1 而 POSTFIELDSIZE 保持默认 -1 时, libcurl 认为 body 由
+                // read callback 提供, 而这里没有注册 READFUNCTION(只有 UploadStream 才注册),
+                // 于是用 libcurl 默认回调 = fread(stdin) —— 实测发出的是 chunked +
+                // Expect: 100-continue, 并把进程 stdin 的内容当请求体传出去; stdin 是 tty 或
+                // 未关闭的管道时还会阻塞 worker 线程, 且不可被 CURLOPT_TIMEOUT 打断。
+                // GET/HEAD 排除在外: 它们不该带 body, 且下面的 COPYPOSTFIELDS 会把方法隐式改写成 POST。
+                if (request.Method != HttpMethod.Get && request.Method != HttpMethod.Head)
                 {
+                    long bodyLength = hasBody ? request.Body.Length : 0;
                     CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
-                        _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, request.Body.Length));
-                    var pin = System.Runtime.InteropServices.GCHandle.Alloc(request.Body,
-                        System.Runtime.InteropServices.GCHandleType.Pinned);
-                    try
+                        _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, bodyLength));
+                    // 空 body 只设 size: POST 据此发 Content-Length: 0; PUT/PATCH 等
+                    // CUSTOMREQUEST 方法维持原行为(不带 Content-Length), 也不会被塞上
+                    // libcurl 默认的 Content-Type: application/x-www-form-urlencoded。
+                    if (bodyLength > 0)
                     {
-                        CheckSetOpt("CURLOPT_COPYPOSTFIELDS",
-                            _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject()));
-                    }
-                    finally
-                    {
-                        pin.Free(); // curl 已复制数据，可以立即释放 pin
+                        var pin = System.Runtime.InteropServices.GCHandle.Alloc(request.Body,
+                            System.Runtime.InteropServices.GCHandleType.Pinned);
+                        try
+                        {
+                            CheckSetOpt("CURLOPT_COPYPOSTFIELDS",
+                                _api.SetOptPtr(h, CurlNative.CURLOPT_COPYPOSTFIELDS, pin.AddrOfPinnedObject()));
+                        }
+                        finally
+                        {
+                            pin.Free(); // curl 已复制数据，可以立即释放 pin
+                        }
                     }
                 }
             }

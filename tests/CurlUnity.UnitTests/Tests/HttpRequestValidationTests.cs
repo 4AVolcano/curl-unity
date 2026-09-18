@@ -437,7 +437,7 @@ namespace CurlUnity.UnitTests.Tests
         [Fact]
         public async Task SendAsync_EmptyBodyOnGet_IsAllowed()
         {
-            // 空 byte[] 不会设置 POSTFIELDS，不触发方法改写，维持向后兼容
+            // GET 不进入 POSTFIELDS 分支，不触发方法改写，维持向后兼容
             var api = new FakeCurlApi();
             api.OnMultiPerform = multi =>
             {
@@ -456,6 +456,109 @@ namespace CurlUnity.UnitTests.Tests
 
             using var resp = await client.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.NotNull(resp);
+        }
+
+        // POSTFIELDSIZE 必须无条件设置：CURLOPT_POST=1 而 POSTFIELDSIZE 留在默认 -1 时，
+        // libcurl 认为 body 由 read callback 提供，而无 UploadStream 时我们没注册
+        // READFUNCTION，于是走 libcurl 默认回调 fread(stdin) —— 发出的是 chunked +
+        // Expect: 100-continue，并把进程 stdin 当请求体传出去。
+        [Theory]
+        [InlineData(HttpMethod.Post)]
+        [InlineData(HttpMethod.Put)]
+        [InlineData(HttpMethod.Patch)]
+        [InlineData(HttpMethod.Delete)]
+        public async Task SendAsync_NullBody_SetsPostFieldSizeZeroWithoutPostFields(HttpMethod method)
+        {
+            var state = await SendAndCaptureAsync(new HttpRequest
+            {
+                Method = method,
+                Url = "http://example.invalid/",
+            });
+
+            Assert.Equal(0, state.OffTOptions[CurlNative.CURLOPT_POSTFIELDSIZE_LARGE]);
+            Assert.False(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_COPYPOSTFIELDS));
+        }
+
+        [Theory]
+        [InlineData(HttpMethod.Post)]
+        [InlineData(HttpMethod.Put)]
+        [InlineData(HttpMethod.Patch)]
+        public async Task SendAsync_EmptyBody_SetsPostFieldSizeZeroWithoutPostFields(HttpMethod method)
+        {
+            var state = await SendAndCaptureAsync(new HttpRequest
+            {
+                Method = method,
+                Url = "http://example.invalid/",
+                Body = Array.Empty<byte>(),
+            });
+
+            Assert.Equal(0, state.OffTOptions[CurlNative.CURLOPT_POSTFIELDSIZE_LARGE]);
+            Assert.False(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_COPYPOSTFIELDS));
+        }
+
+        [Fact]
+        public async Task SendAsync_NonEmptyBody_SetsPostFieldSizeAndCopyPostFields()
+        {
+            var state = await SendAndCaptureAsync(new HttpRequest
+            {
+                Method = HttpMethod.Post,
+                Url = "http://example.invalid/",
+                Body = new byte[] { 1, 2, 3 },
+            });
+
+            Assert.Equal(3, state.OffTOptions[CurlNative.CURLOPT_POSTFIELDSIZE_LARGE]);
+            Assert.True(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_COPYPOSTFIELDS));
+        }
+
+        // GET/HEAD 完全不碰 POSTFIELDS 分支：COPYPOSTFIELDS 会把方法隐式改写成 POST。
+        [Theory]
+        [InlineData(HttpMethod.Get)]
+        [InlineData(HttpMethod.Head)]
+        public async Task SendAsync_GetOrHead_DoesNotSetPostFieldSize(HttpMethod method)
+        {
+            var state = await SendAndCaptureAsync(new HttpRequest
+            {
+                Method = method,
+                Url = "http://example.invalid/",
+            });
+
+            Assert.False(state.OffTOptions.ContainsKey(CurlNative.CURLOPT_POSTFIELDSIZE_LARGE));
+            Assert.False(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_COPYPOSTFIELDS));
+        }
+
+        // 流式上传走 UPLOAD + READFUNCTION，不应落到 POSTFIELDS 分支上。
+        [Fact]
+        public async Task SendAsync_BodyStream_DoesNotSetPostFieldSize()
+        {
+            using var src = new System.IO.MemoryStream(new byte[] { 1, 2, 3 });
+            var state = await SendAndCaptureAsync(new HttpRequest
+            {
+                Method = HttpMethod.Post,
+                Url = "http://example.invalid/",
+                BodyStream = src,
+            });
+
+            Assert.False(state.OffTOptions.ContainsKey(CurlNative.CURLOPT_POSTFIELDSIZE_LARGE));
+            Assert.False(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_COPYPOSTFIELDS));
+        }
+
+        private static async Task<FakeCurlApi.FakeEasyHandleState> SendAndCaptureAsync(HttpRequest request)
+        {
+            var api = new FakeCurlApi();
+            IntPtr captured = IntPtr.Zero;
+            api.OnMultiPerform = multi =>
+            {
+                var handle = api.GetFirstActiveHandle(multi);
+                if (handle != IntPtr.Zero)
+                {
+                    captured = handle;
+                    api.EnqueueCompletion(handle, CurlNative.CURLE_OK);
+                }
+            };
+            using var client = new CurlHttpClient(api);
+
+            using var resp = await client.SendAsync(request).WaitAsync(TimeSpan.FromSeconds(5));
+            return api.GetEasyHandleState(captured);
         }
     }
 }

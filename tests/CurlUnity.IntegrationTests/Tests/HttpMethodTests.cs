@@ -101,5 +101,69 @@ namespace CurlUnity.IntegrationTests.Tests
             var json = JsonDocument.Parse(resp.Body);
             Assert.Equal("OPTIONS", json.RootElement.GetProperty("method").GetString());
         }
+
+        // 空 body 的 POST 必须发 Content-Length: 0。若 POSTFIELDSIZE 没设置,
+        // libcurl 会认为 body 由 read callback 提供, 发出 chunked + Expect: 100-continue,
+        // 并把进程 stdin 的内容当请求体传出去。
+        [Fact]
+        public async Task Post_EmptyBody_SendsContentLengthZero()
+        {
+            using var resp = await _client.PostAsync(
+                $"{_server.HttpUrl}/request-info", Array.Empty<byte>(), "text/plain");
+
+            Assert.Equal(200, resp.StatusCode);
+
+            var json = JsonDocument.Parse(resp.Body).RootElement;
+            Assert.Equal("POST", json.GetProperty("method").GetString());
+            Assert.Equal("0", json.GetProperty("contentLength").GetString());
+            Assert.Equal("", json.GetProperty("transferEncoding").GetString());
+            Assert.Equal("", json.GetProperty("expect").GetString());
+            Assert.Equal(0, json.GetProperty("bodyLength").GetInt64());
+        }
+
+        [Fact]
+        public async Task Post_NullBody_SendsContentLengthZero()
+        {
+            var req = new HttpRequest
+            {
+                Method = HttpMethod.Post,
+                Url = $"{_server.HttpUrl}/request-info",
+            };
+
+            using var resp = await _client.SendAsync(req);
+
+            Assert.Equal(200, resp.StatusCode);
+
+            var json = JsonDocument.Parse(resp.Body).RootElement;
+            Assert.Equal("POST", json.GetProperty("method").GetString());
+            Assert.Equal("0", json.GetProperty("contentLength").GetString());
+            Assert.Equal("", json.GetProperty("transferEncoding").GetString());
+            Assert.Equal(0, json.GetProperty("bodyLength").GetInt64());
+        }
+
+        // PUT/PATCH 等 CUSTOMREQUEST 方法空 body 时维持原行为: 不带 Content-Length,
+        // 也不会被 libcurl 塞上默认的 Content-Type, 但同样不能走 chunked。
+        [Theory]
+        [InlineData(HttpMethod.Put)]
+        [InlineData(HttpMethod.Patch)]
+        [InlineData(HttpMethod.Delete)]
+        public async Task CustomMethod_EmptyBody_DoesNotUseChunked(HttpMethod method)
+        {
+            var req = new HttpRequest
+            {
+                Method = method,
+                Url = $"{_server.HttpUrl}/request-info",
+                Body = Array.Empty<byte>(),
+            };
+
+            using var resp = await _client.SendAsync(req);
+
+            Assert.Equal(200, resp.StatusCode);
+
+            var json = JsonDocument.Parse(resp.Body).RootElement;
+            Assert.Equal(method.ToString().ToUpperInvariant(), json.GetProperty("method").GetString());
+            Assert.Equal("", json.GetProperty("transferEncoding").GetString());
+            Assert.Equal(0, json.GetProperty("bodyLength").GetInt64());
+        }
     }
 }
