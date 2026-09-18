@@ -483,6 +483,7 @@ namespace CurlUnity.UnitTests.Tests
         [InlineData(HttpMethod.Post)]
         [InlineData(HttpMethod.Put)]
         [InlineData(HttpMethod.Patch)]
+        [InlineData(HttpMethod.Delete)]
         public async Task SendAsync_EmptyBody_SetsPostFieldSizeZeroWithoutPostFields(HttpMethod method)
         {
             var state = await SendAndCaptureAsync(new HttpRequest
@@ -510,16 +511,20 @@ namespace CurlUnity.UnitTests.Tests
             Assert.True(state.PointerOptions.ContainsKey(CurlNative.CURLOPT_COPYPOSTFIELDS));
         }
 
-        // GET/HEAD 完全不碰 POSTFIELDS 分支：COPYPOSTFIELDS 会把方法隐式改写成 POST。
+        // GET/HEAD 完全不碰 POSTFIELDS 分支：COPYPOSTFIELDS 会把方法隐式改写成 POST，
+        // 所以 Body 为 null 和空 byte[] 两种情况都必须一个选项都不设。
         [Theory]
-        [InlineData(HttpMethod.Get)]
-        [InlineData(HttpMethod.Head)]
-        public async Task SendAsync_GetOrHead_DoesNotSetPostFieldSize(HttpMethod method)
+        [InlineData(HttpMethod.Get, false)]
+        [InlineData(HttpMethod.Get, true)]
+        [InlineData(HttpMethod.Head, false)]
+        [InlineData(HttpMethod.Head, true)]
+        public async Task SendAsync_GetOrHead_DoesNotSetPostFieldSize(HttpMethod method, bool emptyBody)
         {
             var state = await SendAndCaptureAsync(new HttpRequest
             {
                 Method = method,
                 Url = "http://example.invalid/",
+                Body = emptyBody ? Array.Empty<byte>() : null,
             });
 
             Assert.False(state.OffTOptions.ContainsKey(CurlNative.CURLOPT_POSTFIELDSIZE_LARGE));
