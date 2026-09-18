@@ -610,8 +610,9 @@ namespace CurlUnity.Http
                     long bodyLength = hasBody ? request.Body.Length : 0;
                     CheckSetOpt("CURLOPT_POSTFIELDSIZE_LARGE",
                         _api.SetOptOffT(h, CurlNative.CURLOPT_POSTFIELDSIZE_LARGE, bodyLength));
-                    // 空 body 只设 size: POST 据此发 Content-Length: 0(CURLOPT_POST=1 仍会让
-                    // libcurl 补 Content-Type: application/x-www-form-urlencoded, 与修复前一致);
+                    // 空 body 只设 size: POST 据此发 Content-Length: 0(调用方未自带
+                    // Content-Type 时, CURLOPT_POST=1 仍会让 libcurl 补
+                    // application/x-www-form-urlencoded, 与修复前一致);
                     // PUT/PATCH 等 CUSTOMREQUEST 方法维持原行为——size 对它们是 no-op,
                     // 既不发 Content-Length 也不会被补上那个默认 Content-Type。
                     if (bodyLength > 0)
